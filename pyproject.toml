@@ -23,6 +23,9 @@ dependencies = [
     "httpx",
 ]
 
+[project.scripts]
+aegis = "aegis.cli:app"
+
 [dependency-groups]
 dev = [
     "pytest",

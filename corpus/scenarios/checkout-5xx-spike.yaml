@@ -1,0 +1,28 @@
+name: checkout-5xx-spike
+alert:
+  service: checkout-api
+  alert_name: HighErrorRate
+  dedup_key: pd-checkout-5xx-0001
+  fired_at: "2026-08-19T14:08:00Z"
+  window_start: "2026-08-19T13:38:00Z"
+  window_end: "2026-08-19T14:13:00Z"
+  payload: {summary: "5xx rate > 5% for 3m on checkout-api", severity: critical}
+expect:
+  service: checkout-api
+  root_cause_contains: [timeout, payments]
+  must_cite:
+    - "commit:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    - "rollup:checkout-api/2026-08-19T14:03:00Z/5xx/error/*"
+  ruled_out_contains: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+  forbidden_root_cause: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+  min_confidence: medium
+  canary: GROUND-TRUTH-CANARY-DO-NOT-LEAK
+  reachability:
+    - fact: timeout lowered 30s -> 3s
+      tool: get_incident_diff
+      field: focus.deployments[].commit.files_changed[].hunks
+      value_contains: [timeout, "3"]
+    - fact: 5xx volume rose after the deploy
+      tool: get_error_telemetry
+      field: top_templates[].delta
+      value_predicate: "> 0"

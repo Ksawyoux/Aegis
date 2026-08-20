@@ -1,0 +1,5 @@
+- name: checkout-api
+  repo: acme/checkout
+  log_keys: [checkout-api, checkout]
+  k8s_names: [checkout-api]
+  log_timezone: UTC

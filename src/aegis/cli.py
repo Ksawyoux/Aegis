@@ -1,0 +1,251 @@
+"""The intentionally thin command-line interface for Aegis."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from uuid import uuid4
+
+import typer
+import yaml  # type: ignore[import-untyped]
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Engine, func, select
+from sqlalchemy.orm import Session
+
+from aegis.agent.summary import IncidentSummary
+from aegis.app.investigate import build_investigation_request
+from aegis.app.investigate import investigate as run_investigation
+from aegis.app.run_context import InMemorySink, RunContext
+from aegis.config import Settings
+from aegis.db.models import Service, UnresolvedEvent
+from aegis.db.session import create_database_engine
+from aegis.ingest.git import load_git_export, upsert_commits, upsert_deployments
+from aegis.ingest.logs import ParseContext, iter_drafts
+from aegis.ingest.normalize import ServiceRegistry
+from aegis.ingest.pipeline import IngestReport, LogRecord, ingest_source
+
+app = typer.Typer(no_args_is_help=True)
+db_app = typer.Typer(no_args_is_help=True)
+ingest_app = typer.Typer(no_args_is_help=True)
+app.add_typer(db_app, name="db")
+app.add_typer(ingest_app, name="ingest")
+
+
+@db_app.command("upgrade")
+def db_upgrade() -> None:
+    """Bring the configured database schema to its latest revision."""
+    command.upgrade(Config("alembic.ini"), "head")
+
+
+@ingest_app.command("services")
+def ingest_services() -> None:
+    """Load the configured service identities and reject ambiguous mappings."""
+    settings = Settings()
+    engine = create_database_engine(settings)
+    try:
+        services_path = settings.corpus_dir / "services.yaml"
+        with Session(engine) as session, session.begin():
+            _upsert_services(session, services_path)
+        typer.echo(f"services: {len(_service_definitions(services_path))} loaded")
+    finally:
+        engine.dispose()
+
+
+@ingest_app.command("all")
+def ingest_all() -> None:
+    """Ingest services, Git evidence, and logs from the configured corpus."""
+    settings = Settings()
+    engine = create_database_engine(settings)
+    try:
+        with Session(engine) as session, session.begin():
+            _upsert_services(session, settings.corpus_dir / "services.yaml")
+        typer.echo("services: loaded")
+
+        for git_path in sorted((settings.corpus_dir / "git").glob("*.json")):
+            with Session(engine) as session, session.begin():
+                registry = _registry_from_session(session)
+                export = load_git_export(git_path)
+                commits = upsert_commits(session, export, registry, settings=settings)
+                deployments = upsert_deployments(session, export, registry, settings)
+            typer.echo(
+                f"git {git_path.name}: commits inserted={commits.inserted} "
+                f"unchanged={commits.unchanged}; deployments inserted={deployments.inserted} "
+                f"updated={deployments.updated} unchanged={deployments.unchanged}"
+            )
+
+        for log_path in sorted((settings.corpus_dir / "logs").glob("*")):
+            if not log_path.is_file():
+                continue
+            with Session(engine) as session, session.begin():
+                registry = _registry_from_session(session)
+                relative_path = log_path.relative_to(settings.corpus_dir).as_posix()
+                records = tuple(
+                    iter_drafts(
+                        log_path,
+                        ParseContext(
+                            registry=registry,
+                            source_file=relative_path,
+                            default_log_timezone="UTC",
+                        ),
+                    )
+                )
+                report = ingest_source(
+                    session,
+                    source=relative_path,
+                    records=records,
+                    cursor=_draft_cursor(records),
+                )
+            _render_ingest_report(relative_path, report)
+
+        _render_unresolved_report(engine)
+    finally:
+        engine.dispose()
+
+
+@app.command("serve-mcp")
+def serve_mcp() -> None:
+    """Run the MCP server over standard input and output."""
+    from aegis.mcp_server.server import main
+
+    main()
+
+
+@app.command("investigate")
+def investigate_command(
+    scenario: Path = typer.Option(..., "--scenario", exists=True, readable=True),
+) -> None:
+    """Run an investigation described by a scenario and render its result."""
+    request = build_investigation_request(_load_scenario(scenario))
+    summary = run_investigation(request, RunContext(uuid4().hex, InMemorySink()))
+    typer.echo(_render_markdown(summary))
+    typer.echo(json.dumps(summary.model_dump(mode="json"), indent=2, sort_keys=True))
+
+
+def _load_scenario(path: Path) -> dict[str, object]:
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise typer.BadParameter("scenario must be a YAML object", param_hint="--scenario")
+    return value
+
+
+def _upsert_services(session: Session, path: Path) -> ServiceRegistry:
+    definitions = _service_definitions(path)
+    # Validate the full corpus configuration before it can mutate the database.
+    ServiceRegistry.load([_service_from_definition(definition) for definition in definitions])
+
+    for definition in definitions:
+        service = _service_from_definition(definition)
+        existing = session.scalar(
+            select(Service).where(Service.name == service.name).with_for_update()
+        )
+        if existing is None:
+            session.add(service)
+            continue
+        existing.repo = service.repo
+        existing.log_keys = service.log_keys
+        existing.k8s_names = service.k8s_names
+        existing.infra_tags = service.infra_tags
+        existing.log_timezone = service.log_timezone
+    session.flush()
+    return _registry_from_session(session)
+
+
+def _service_definitions(path: Path) -> list[dict[str, object]]:
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError("services.yaml must contain a list of service objects")
+    return value
+
+
+def _service_from_definition(definition: Mapping[str, object]) -> Service:
+    name = definition.get("name")
+    if not isinstance(name, str):
+        raise ValueError("service name must be a string")
+    repo = definition.get("repo")
+    if repo is not None and not isinstance(repo, str):
+        raise ValueError(f"repo for {name!r} must be a string")
+    return Service(
+        name=name,
+        repo=repo,
+        log_keys=_string_list(definition.get("log_keys"), "log_keys", name),
+        k8s_names=_string_list(definition.get("k8s_names"), "k8s_names", name),
+        infra_tags=_mapping_value(definition.get("infra_tags"), "infra_tags", name),
+        log_timezone=_string_value(definition.get("log_timezone", "UTC"), "log_timezone", name),
+    )
+
+
+def _string_list(value: object, field: str, service: str) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{field} for {service!r} must be a list of strings")
+    return value
+
+
+def _mapping_value(value: object, field: str, service: str) -> dict[str, object]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise ValueError(f"{field} for {service!r} must be an object with string keys")
+    return value
+
+
+def _string_value(value: object, field: str, service: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} for {service!r} must be a string")
+    return value
+
+
+def _registry_from_session(session: Session) -> ServiceRegistry:
+    return ServiceRegistry.load(session.scalars(select(Service).order_by(Service.name)).all())
+
+
+def _draft_cursor(records: Sequence[LogRecord]) -> int:
+    return sum(len(record.raw.encode("utf-8")) for record in records)
+
+
+def _render_ingest_report(source: str, report: IngestReport) -> None:
+    typer.echo(
+        f"logs {source}: inserted={report.inserted} duplicates={report.duplicates} "
+        f"promoted={report.promoted} unresolved={report.unresolved}; "
+        f"rollups dirty={report.rollup.dirty_pairs} deleted={report.rollup.deleted} "
+        f"inserted={report.rollup.inserted}"
+    )
+
+
+def _render_unresolved_report(engine: Engine) -> None:
+    with Session(engine) as session:
+        rows = session.execute(
+            select(UnresolvedEvent.reason, func.count())
+            .group_by(UnresolvedEvent.reason)
+            .order_by(UnresolvedEvent.reason)
+        ).all()
+    if not rows:
+        typer.echo("unresolved: none")
+        return
+    typer.echo("unresolved:")
+    for reason, count in rows:
+        typer.echo(f"  {reason}: {count}")
+
+
+def _render_markdown(summary: IncidentSummary) -> str:
+    lines = [
+        f"# Investigation: {summary.service}",
+        "",
+        "## Root cause",
+        summary.root_cause.statement,
+        "",
+        f"Confidence: {summary.confidence}",
+        "",
+        "## Recommended action",
+        summary.recommended_action,
+    ]
+    if summary.timeline:
+        lines.extend(["", "## Timeline"])
+        lines.extend(f"- {entry.at.isoformat()}: {entry.what}" for entry in summary.timeline)
+    return "\n".join(lines)
+
+
+__all__ = ["app", "build_investigation_request"]
