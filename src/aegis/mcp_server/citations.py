@@ -161,9 +161,15 @@ def parse(cite: str) -> Citation:
     if prefix == "commit":
         _parse_match(body, _SHA_RE, "commit SHA")
         return Citation("commit", (body,))
-    if prefix in {"deploy", "infra", "log"}:
-        _parse_match(body, _UID_RE, f"{prefix} uid")
-        return Citation(prefix, (body,))
+    if prefix == "deploy":
+        _parse_match(body, _UID_RE, "deploy uid")
+        return Citation("deploy", (body,))
+    if prefix == "infra":
+        _parse_match(body, _UID_RE, "infra uid")
+        return Citation("infra", (body,))
+    if prefix == "log":
+        _parse_match(body, _UID_RE, "log uid")
+        return Citation("log", (body,))
     if prefix == "rollup":
         return _parse_rollup(body)
     if prefix == "postmortem":

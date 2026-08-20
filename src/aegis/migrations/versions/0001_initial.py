@@ -7,6 +7,8 @@ Create Date: 2026-08-20
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import sqlalchemy as sa
 from alembic import op
 from pgvector.sqlalchemy import Vector
@@ -19,7 +21,7 @@ branch_labels = None
 depends_on = None
 
 
-def _created_at() -> sa.Column[object]:
+def _created_at() -> sa.Column[datetime]:
     return sa.Column(
         "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")
     )
