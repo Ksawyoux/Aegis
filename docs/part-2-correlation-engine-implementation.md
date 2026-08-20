@@ -1,5 +1,9 @@
 # Part 2 — v0.2 Offline Correlation Engine: implementation specification
 
+> **Revision 3.** The embedding provider is OpenAI `text-embedding-3-small` at
+> `dimensions=1024` (§4.1), chosen over a local Ollama model: it needs no disk, and Matryoshka
+> truncation lands exactly on the frozen `vector(1024)` column, so nothing migrates.
+>
 > **Revision 2**, after review by `gpt-5.6-sol` (xhigh). Eleven blocking defects in revision 1, all
 > verified against the built code and fixed here; §16 lists them. Two were milestone-breaking:
 > attributed Terraform evidence was reachable through **no field of the frozen response envelope**,
@@ -285,25 +289,71 @@ class EmbeddingProvider(Protocol):
     def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
 ```
 
-**`OllamaEmbeddings`** posts to `{base_url}/api/embed` with
-`{"model": ..., "input": [...], "truncate": false}` — silent truncation would embed a prefix and
-report success. Validation on **every** response, not just the first: exactly one vector per input,
-each of `dim` components, all finite, and non-zero norm. Batches of 32, 120s timeout, three retries
-on connection and 5xx errors only; a malformed 200 is **not** retried, because retrying a
-deterministic parse failure just burns time.
+### 4.1 `OpenAIEmbeddings` — the production provider
 
-**`FixtureEmbeddings`** returns vectors from a committed map keyed by exact text with a declared
-neighbourhood structure. Never hash-derived: SHA vectors have arbitrary neighbourhoods, so
-"the expected postmortem is nearest" would assert nothing.
+**Model: `text-embedding-3-small` with `dimensions=1024`.** Its native width is 1536; the
+`dimensions` parameter (supported only on the `text-embedding-3-*` family) truncates via Matryoshka
+representation. That matters because it means **no migration** — the frozen `vector(1024)` column and
+`embedding_dim: Literal[1024]` stay exactly as they are.
 
-**`model_fingerprint`** is stored on each `postmortems` row alongside `content_sha`. Changing
-`embedding_model` while content is unchanged would otherwise leave old vectors searched by new-space
-queries at the same dimension — silently meaningless similarities with no error. Unchanged content is
-treated as unchanged embeddings **only when the fingerprint also matches**.
+```http
+POST {openai_base_url}/embeddings
+Authorization: Bearer {openai_api_key}
 
-**Environment.** Ollama is not installed here and `bge-m3` is ~1.2 GB against ~191 MB free. All
-fixture-backed gates run locally; Ollama acceptance is **required-but-unexecuted** and must run
-elsewhere (§15 answer 5). Do not claim the milestone verified on fixture gates alone.
+{"model": "text-embedding-3-small", "input": [...], "dimensions": 1024,
+ "encoding_format": "float"}
+```
+
+**Order the response by `index`, never by position.** The response is
+`{"data": [{"embedding": [...], "index": n}, ...]}`, and the `index` field exists precisely because
+position is not a contract. Zipping `data` against the input list positionally is the same class of
+defect as pairing tool results by list order instead of `tool_use_id` — it passes every single-input
+test and silently attributes one chunk's vector to another document under batching. Sort by `index`
+and assert the index set equals `range(len(inputs))`.
+
+**Validation on every response**, not just the first: exactly one vector per input, each of `dim`
+components, all finite, and non-zero norm. `text-embedding-3-*` returns unit-normalised vectors, and
+truncated ones are re-normalised — assert `‖v‖ ≈ 1` rather than assuming it, since cosine distance is
+only meaningful if that holds.
+
+**Batching and limits.** At most 2048 inputs per request, and each input must fit the model's token
+limit (8191). Chunking already caps sections well below that (§5), so an over-limit input is an
+ingest bug, not a runtime condition — surface it as an error rather than truncating. Batches of 128,
+60s timeout.
+
+**Retries** on connection errors, 429, and 5xx with exponential backoff. A malformed 200 is **not**
+retried: retrying a deterministic parse failure only burns time and quota.
+
+`openai_base_url` is configurable so the composition test in §11 can point at a local fake — which is
+strictly easier than the Ollama equivalent, because it needs no daemon and no key.
+
+### 4.2 `FixtureEmbeddings`
+
+Returns vectors from a committed map keyed by exact text with a declared neighbourhood structure.
+Never hash-derived: SHA vectors have arbitrary neighbourhoods, so "the expected postmortem is
+nearest" would assert nothing.
+
+### 4.3 `model_fingerprint`
+
+Stored on each `postmortems` row alongside `content_sha`, as
+`openai:text-embedding-3-small:1024`. Changing the model or the requested dimension while content is
+unchanged would otherwise leave old vectors searched by new-space queries **at the same width** —
+silently meaningless similarities with no error anywhere. Unchanged content is treated as unchanged
+embeddings **only when the fingerprint also matches**.
+
+The dimension is part of the fingerprint deliberately: `dimensions=1024` and `dimensions=1536` from
+the same model are different spaces that both fit a `vector(1024)` column after truncation.
+
+### 4.4 Configuration
+
+`ollama_base_url` is replaced by `openai_base_url` (default `https://api.openai.com/v1`) and
+`openai_api_key`; `embedding_model` defaults to `text-embedding-3-small`. Part 0 §16 lists config
+fields as deliberately not frozen, so this is a substitution, not a contract change.
+
+**Environment.** `OPENAI_API_KEY` is **not set here**. All fixture-backed and fake-endpoint gates run
+locally; live-provider acceptance is **required-but-unexecuted** (§15 answer 5). Unlike the Ollama
+path this is a credential away rather than a 1.2 GB install on a full disk — but until it runs, do
+not claim retrieval quality is verified.
 
 ---
 
@@ -383,8 +433,8 @@ harvested into `captured_cites` from a list-root result.
 
 `Session` and `EmbeddingProvider` are not model-visible arguments. The server constructs both per
 call and binds them; only `error_signature`, `k`, and `service` are tool parameters. The MCP child
-process therefore needs `AEGIS_OLLAMA_BASE_URL`, `AEGIS_EMBEDDING_MODEL`, and `AEGIS_EMBEDDING_DIM`
-in addition to the database URL — `agent/transport.py` passes the whole environment plus an explicit
+process therefore needs `OPENAI_API_KEY`, `AEGIS_OPENAI_BASE_URL`, `AEGIS_EMBEDDING_MODEL`, and
+`AEGIS_EMBEDDING_DIM` in addition to the database URL — `agent/transport.py` passes the whole environment plus an explicit
 database URL, so this works, but a test must prove the child is configured, not just the parent.
 
 A provider timeout must surface as a `ToolError`, not tear down the transport — otherwise nested
@@ -458,9 +508,10 @@ Event `count=7` verified **all the way through** `error_rollups`, series, status
 `count`/`delta`, and `occurrence_count` — an `attrs`-only assertion passes while telemetry reports
 `None`; successive snapshots at count 1 then 7 producing one row, not two.
 
-**Embeddings:** response-cardinality mismatch, wrong dimension after the first vector, zero and
-non-finite vectors, `truncate:false` sent, retry classification; a fingerprint change forcing
-re-embed.
+**Embeddings:** response-cardinality mismatch; wrong dimension after the first vector; zero and
+non-finite vectors; **`data` returned out of order, asserting the provider sorts by `index`** — a
+positional implementation passes every single-input test; a non-unit norm; an over-limit input
+raising rather than truncating; retry classification; a fingerprint change forcing re-embed.
 
 **Tool 3:** real pgvector rows for identical, orthogonal, and low-similarity vectors — proving the
 distance/similarity direction is right, since a determinism suite passes perfectly with backward
@@ -483,8 +534,8 @@ test that exercises the seam rather than either side of it.
 | --- | --- | --- |
 | CLI → new loaders | A loader is complete but never called by `aegis ingest all`, repeating "nothing spawned the server" | Subprocess `aegis ingest all` against a fresh database asserting **exact non-zero counts per source** |
 | K8s loader → pipeline → rollups | Rows inserted without dirty-set capture, so OOM evidence never reaches telemetry | Ingest via `ingest_source`, then assert the K8s identity appears in `get_error_telemetry` |
-| Server → provider | Three tools register but Tool 3 fails because no provider is bound | Invoke Tool 3 **through spawned stdio** against a tiny fake local `/api/embed` |
-| Transport env → MCP child | Child uses different Ollama/model/dim settings than the parent | Assert the child's effective settings, not the parent's |
+| Server → provider | Three tools register but Tool 3 fails because no provider is bound | Invoke Tool 3 **through spawned stdio** against a local fake `/embeddings` endpoint — no key, no daemon |
+| Transport env → MCP child | Child uses a different API key, base URL, model, or dimension than the parent | Assert the child's effective settings, not the parent's |
 | Tool 3 → agent capture | Model sees the list, provenance never captures it, failure appears later as a fabricated citation | Deterministic loop test with a list-root result asserting both citation fields captured before extraction |
 | Postmortem edit → flush order | INSERT before DELETE trips the unique constraint | Edit through the real ORM path |
 | Double ingest → all sources | Both runs produce identical **zeros** when loaders are unwired | Assert exact non-zero counts, not merely equality |
@@ -506,9 +557,9 @@ test that exercises the seam rather than either side of it.
   evidence with Tool 3 disabled; scenario evidence horizons do not overlap.
 - All five evaluations pass, including `payments-pool-exhaustion` with no deploy in window.
 
-**Conditional:** Ollama acceptance tests are required and **cannot run in this environment**. The
-milestone's claim is not fully verified until they run elsewhere. Report them as
-required-but-unexecuted rather than as passing.
+**Conditional:** live-provider acceptance tests are required and `OPENAI_API_KEY` is not set here.
+The milestone's claim is not fully verified until they run. Report them as required-but-unexecuted
+rather than as passing.
 
 ## 13. Deliberately does not prove
 
@@ -524,7 +575,7 @@ reproducibility · superiority over a multi-agent alternative.
 2. nginx and logfmt (mechanical ports proving the new protocol).
 3. The traceback assembler, through the binary reader and pipeline.
 4. Terraform, then Kubernetes.
-5. `embeddings/` with `FixtureEmbeddings`; `OllamaEmbeddings` behind it.
+5. `embeddings/` with `FixtureEmbeddings`, then `OpenAIEmbeddings` behind the same protocol.
 6. Postmortem ingest; Tool 3; the capture seam and server binding.
 7. `other_services` and attributed infra population.
 8. Corpus expansion, the contract gate, prompt rules, evaluations.
@@ -542,8 +593,11 @@ reproducibility · superiority over a multi-agent alternative.
    *Trade-off:* a high-count Event can rank below chatty logs; documented in tool and prompt.
 4. **Postmortem non-substitutability** — authoring rule plus a mechanical **leakage scan** (verbatim
    denylist). Described as leakage detection, not proof. *Trade-off:* paraphrase remains judgment.
-5. **Ollama** — fixture gates pass locally; Ollama acceptance is required-but-unexecuted and runs
-   elsewhere. *Trade-off:* the Part 2 claim stays conditional on an external run.
+5. **Live provider** — `text-embedding-3-small` at `dimensions=1024`, so the frozen `vector(1024)`
+   column needs no migration. Fixture and fake-endpoint gates pass locally; live acceptance is
+   required-but-unexecuted until `OPENAI_API_KEY` is set. *Trade-off:* Tool 3 now makes a network
+   call, so a provider timeout must surface as `ToolError` rather than tearing down transport
+   (§6.2) — a remote provider makes that path likelier than a local daemon did.
 
 ---
 
@@ -563,8 +617,8 @@ reproducibility · superiority over a multi-agent alternative.
 | 10 | Terraform leaf `.name` aliases resources across modules | §2 full `.address` |
 | 11 | Fixture provider cannot serve agent-invented signatures | §4, §15.5 split acceptance matrix |
 
-**Also fixed:** delete-flush before insert and no ingest during investigation; per-response Ollama
-validation with `truncate:false` and retry classification; `model_fingerprint` stored and compared;
+**Also fixed:** delete-flush before insert and no ingest during investigation; per-response provider
+validation and retry classification; `model_fingerprint` stored and compared;
 Terraform sensitive-value redaction; `k` counting distinct slugs; isolation asserted over baseline and
 lookback horizons; K8s JSON byte-offset rule; Event snapshot replacement; separate per-service queries
 to avoid join multiplication; registry injection behind an internal builder.
