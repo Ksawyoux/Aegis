@@ -144,7 +144,6 @@ def postmortem() -> PostmortemHit:
 @pytest.mark.parametrize(
     ("factory", "field"),
     [
-        (lambda: anomaly(), "source_cites"),
         (
             lambda: SeriesPoint(
                 bucket_start=NOW,
@@ -335,3 +334,27 @@ def test_postmortem_resolution_citation_is_validated() -> None:
             resolution_md="resolution",
             similarity=0.8,
         )
+
+
+def test_template_anomaly_allows_empty_source_cites_when_baseline_cites_support_it() -> None:
+    """A baseline-only identity has a current count of zero and no current rows to cite."""
+    model = anomaly().model_copy(update={"count": 0, "baseline_count": 2, "delta": -2})
+    rebuilt = TemplateAnomaly(
+        **{**model.model_dump(), "source_cites": [], "baseline_cites": [rollup_cite()]}
+    )
+    assert rebuilt.source_cites == []
+    assert rebuilt.baseline_cites == [rollup_cite()]
+
+
+def test_template_anomaly_rejects_having_no_citations_at_all() -> None:
+    """Empty on both sides means the anomaly is supported by nothing."""
+    model = anomaly()
+    with pytest.raises(ValidationError):
+        TemplateAnomaly(**{**model.model_dump(), "source_cites": [], "baseline_cites": []})
+
+
+def test_template_anomaly_still_validates_citation_format_when_source_cites_is_empty() -> None:
+    """The baseline-only path must not bypass validation the way model_construct would."""
+    model = anomaly()
+    with pytest.raises(ValidationError):
+        TemplateAnomaly(**{**model.model_dump(), "source_cites": [], "baseline_cites": ["bad"]})

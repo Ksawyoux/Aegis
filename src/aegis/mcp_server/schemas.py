@@ -107,7 +107,11 @@ class TemplateAnomaly(BaseModel):
     count: int
     baseline_count: int
     delta: int
-    source_cites: NonEmptyCitationList
+    # Deliberately not NonEmptyCitationList: a baseline-only identity has a
+    # current count of zero and therefore no current rollup rows to cite. The
+    # rule that matters is that the anomaly is supported by *some* citation,
+    # enforced across both lists below.
+    source_cites: CitationList
     baseline_cites: CitationList
     occurrence_count: int | None = None
     exemplar: Exemplar
@@ -116,6 +120,12 @@ class TemplateAnomaly(BaseModel):
     @classmethod
     def _are_rollup_citations(cls, values: list[str]) -> list[str]:
         return _require_rollup_citations(values)
+
+    @model_validator(mode="after")
+    def _has_supporting_citations(self) -> TemplateAnomaly:
+        if not self.source_cites and not self.baseline_cites:
+            raise ValueError("a template anomaly must cite at least one rollup row")
+        return self
 
 
 class SeriesPoint(BaseModel):
