@@ -350,10 +350,32 @@ the same model are different spaces that both fit a `vector(1024)` column after 
 `openai_api_key`; `embedding_model` defaults to `text-embedding-3-small`. Part 0 §16 lists config
 fields as deliberately not frozen, so this is a substitution, not a contract change.
 
-**Environment.** `OPENAI_API_KEY` is **not set here**. All fixture-backed and fake-endpoint gates run
-locally; live-provider acceptance is **required-but-unexecuted** (§15 answer 5). Unlike the Ollama
-path this is a credential away rather than a 1.2 GB install on a full disk — but until it runs, do
-not claim retrieval quality is verified.
+**The key is read from the conventional name.** `Settings` uses `env_prefix="AEGIS_"`, which would
+otherwise demand `AEGIS_OPENAI_API_KEY` — a project-specific rename of a variable every other OpenAI
+tool already expects, for no benefit. The field therefore declares an explicit alias:
+
+```python
+openai_api_key: SecretStr | None = Field(
+    default=None,
+    validation_alias=AliasChoices("OPENAI_API_KEY", "AEGIS_OPENAI_API_KEY"),
+)
+```
+
+`SecretStr` so the value cannot be printed by an accidental `repr(settings)`, a trace dump, or a
+`model_dump()` in a run trace — `RunContext.to_json()` serializes freely and traces are persisted in
+v0.3.
+
+**Two drifts from Part 0 to correct while here.** The built `Settings` declares no `env_file`,
+although Part 0 §2 specified `env_file=".env"`; add it, since `.env` is already gitignored and a
+long-lived credential should not have to live in a shell profile. And `Settings()` is constructed in
+several places rather than injected, so a test cannot override the key without mutating the
+environment — the provider must take `Settings` as an argument, like
+`baseline_sparse_threshold` and the embedding provider already do.
+
+**Environment.** A key is available for this project, so live-provider acceptance **can and must
+run** as part of Part 2's exit criteria — it is not deferred. Fixture and fake-endpoint gates remain
+the default suite so the ordinary test run stays offline, free, and deterministic; the live tests are
+opt-in via the key's presence and assert retrieval *quality*, which fixtures cannot.
 
 ---
 
@@ -557,9 +579,11 @@ test that exercises the seam rather than either side of it.
   evidence with Tool 3 disabled; scenario evidence horizons do not overlap.
 - All five evaluations pass, including `payments-pool-exhaustion` with no deploy in window.
 
-**Conditional:** live-provider acceptance tests are required and `OPENAI_API_KEY` is not set here.
-The milestone's claim is not fully verified until they run. Report them as required-but-unexecuted
-rather than as passing.
+**Live-provider acceptance is required and runnable.** A key is available, so Part 2 is not
+complete until the live retrieval tests pass: real embeddings for the committed corpus, and a known
+error signature retrieving its intended postmortem above the similarity floor. Fixture gates alone
+verify plumbing, not retrieval quality — the distinction that would have hidden an inverted `<=>`
+ranking.
 
 ## 13. Deliberately does not prove
 
@@ -594,10 +618,11 @@ reproducibility · superiority over a multi-agent alternative.
 4. **Postmortem non-substitutability** — authoring rule plus a mechanical **leakage scan** (verbatim
    denylist). Described as leakage detection, not proof. *Trade-off:* paraphrase remains judgment.
 5. **Live provider** — `text-embedding-3-small` at `dimensions=1024`, so the frozen `vector(1024)`
-   column needs no migration. Fixture and fake-endpoint gates pass locally; live acceptance is
-   required-but-unexecuted until `OPENAI_API_KEY` is set. *Trade-off:* Tool 3 now makes a network
-   call, so a provider timeout must surface as `ToolError` rather than tearing down transport
-   (§6.2) — a remote provider makes that path likelier than a local daemon did.
+   column needs no migration. A key is available, so live acceptance runs as part of this milestone
+   rather than being deferred; the default suite stays fixture-backed so ordinary runs are offline,
+   free, and deterministic. *Trade-off:* Tool 3 now makes a network call, so a provider timeout must
+   surface as `ToolError` rather than tearing down transport (§6.2) — a remote provider makes that
+   path likelier than a local daemon did.
 
 ---
 
