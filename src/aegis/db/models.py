@@ -5,8 +5,8 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    BigInteger,
     CHAR,
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -115,6 +115,9 @@ class InfraChange(CreatedAtMixin, Base):
         CheckConstraint(
             "action IN ('create', 'update', 'delete', 'replace')", name="ck_infra_changes_action"
         ),
+        Index("ix_infra_changes_service_applied_at", "service_id", desc("applied_at")),
+        # Unattributed changes (service_id IS NULL) are queried by time alone.
+        Index("ix_infra_changes_applied_at", desc("applied_at")),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)

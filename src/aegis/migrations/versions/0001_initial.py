@@ -289,6 +289,14 @@ def upgrade() -> None:
         ["service_id", sa.text("started_at DESC")],
     )
     op.create_index(
+        "ix_infra_changes_service_applied_at",
+        "infra_changes",
+        ["service_id", sa.text("applied_at DESC")],
+    )
+    op.create_index(
+        "ix_infra_changes_applied_at", "infra_changes", [sa.text("applied_at DESC")]
+    )
+    op.create_index(
         "ix_log_events_service_ts", "log_events", ["service_id", sa.text("ts DESC")]
     )
     op.create_index("ix_log_events_template_hash", "log_events", ["template_hash"])
