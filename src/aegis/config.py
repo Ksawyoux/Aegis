@@ -13,10 +13,13 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://aegis:aegis@localhost:5433/aegis"
     ollama_base_url: str = "http://localhost:11434"
-    embedding_model: str = "mxbai-embed-large"
-    anthropic_model: str = "claude-sonnet-4-20250514"
-    agent_effort: str = "medium"
-    agent_max_turns: int = 12
+    embedding_model: str = "bge-m3"
+    anthropic_model: str = "claude-opus-5"
+    agent_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    # Aggregates-only tool access means one telemetry call per service to
+    # establish cross-service correlation, so multi-service incidents need
+    # more turns than a single-service one.
+    agent_max_turns: int = 20
     slack_webhook_url: str | None = None
     github_webhook_secret: str | None = None
     corpus_dir: Path = Path("corpus")
