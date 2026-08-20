@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aegis-context"
+version = "0.1.0"
+description = "Evidence-backed incident context foundation"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy",
+    "alembic",
+    "psycopg[binary]",
+    "pgvector",
+    "pydantic",
+    "pydantic-settings",
+    "typer",
+    "rich",
+    "pyyaml",
+    "python-dateutil",
+    "fastmcp",
+    "anthropic[mcp]",
+    "httpx",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "testcontainers[postgres]",
+    "ruff",
+    "mypy",
+    "freezegun",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aegis"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
