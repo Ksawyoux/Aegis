@@ -74,12 +74,19 @@ def test_files_changed_jsonb_check_rejects_bad_omission_reason(connection: Conne
                          additions, deletions)
                     VALUES
                         (repeat('a', 40), :service_id, now(), now(), 'message',
-                         '[{"path":"app.py","status":"modified","additions":1,"deletions":0,
-                            "hunks":null,"hunks_omitted":"invalid"}]'::jsonb,
+                         CAST(:files_changed AS jsonb),
                          1, 0)
                     """
                 ),
-                {"service_id": service_id},
+                # Bound rather than inlined: a JSON literal's colons are parsed as
+                # bind parameters by text(), so "additions":1 becomes a parameter.
+                {
+                    "service_id": service_id,
+                    "files_changed": (
+                        '[{"path":"app.py","status":"modified","additions":1,'
+                        '"deletions":0,"hunks":null,"hunks_omitted":"invalid"}]'
+                    ),
+                },
             )
 
 

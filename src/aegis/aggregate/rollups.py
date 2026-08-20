@@ -129,12 +129,17 @@ def recompute(session: Session, *, dirty: DirtySet) -> RollupReport:
                     count(*)::integer AS count,
                     min(e.ts) AS first_seen,
                     max(e.ts) AS last_seen,
+                    -- Each term is COALESCEd because an absent attrs key makes
+                    -- jsonb_typeof(...) NULL, and a single NULL would otherwise
+                    -- propagate through the addition and null the whole score --
+                    -- collapsing every row to the id tiebreak.
                     (array_agg(e.id ORDER BY
                        ( (e.trace_id IS NOT NULL AND e.trace_id <> '')::int
-                       + (jsonb_typeof(e.attrs->'stack')       = 'array')::int
-                       + (jsonb_typeof(e.attrs->'upstream')    = 'string')::int
-                       + (jsonb_typeof(e.attrs->'duration_ms') = 'number')::int
-                       + (jsonb_typeof(e.attrs->'exc_type')    = 'string')::int ) DESC,
+                       + COALESCE(jsonb_typeof(e.attrs->'stack')       = 'array',  false)::int
+                       + COALESCE(jsonb_typeof(e.attrs->'upstream')    = 'string', false)::int
+                       + COALESCE(jsonb_typeof(e.attrs->'duration_ms') = 'number', false)::int
+                       + COALESCE(jsonb_typeof(e.attrs->'exc_type')    = 'string', false)::int
+                       ) DESC,
                        e.id ASC))[1] AS exemplar_log_event_id
                 FROM log_events AS e
                 JOIN aegis_dirty_rollup_minutes AS dirty
