@@ -43,10 +43,10 @@ def _context() -> tuple[RunContext, InMemorySink]:
 
 
 def test_success_returns_summary_and_emits_terminal_event(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_agent(*_args: object) -> AgentResult:
+    async def fake_run_agent(*_args: object, **_kwargs: object) -> AgentResult:
         return AgentResult(summary=_summary(), turns_used=2)
 
-    monkeypatch.setattr("aegis.app.investigate.run_agent", fake_run_agent)
+    monkeypatch.setattr("aegis.app.investigate._run_with_transport", fake_run_agent)
     context, sink = _context()
 
     assert investigate(_request(), context) == _summary()
@@ -64,10 +64,10 @@ def test_success_returns_summary_and_emits_terminal_event(monkeypatch: pytest.Mo
 def test_failure_propagates_after_terminal_trace_event(
     monkeypatch: pytest.MonkeyPatch, failure: BaseException
 ) -> None:
-    async def fake_run_agent(*_args: object) -> AgentResult:
+    async def fake_run_agent(*_args: object, **_kwargs: object) -> AgentResult:
         raise failure
 
-    monkeypatch.setattr("aegis.app.investigate.run_agent", fake_run_agent)
+    monkeypatch.setattr("aegis.app.investigate._run_with_transport", fake_run_agent)
     context, sink = _context()
 
     with pytest.raises(type(failure)):

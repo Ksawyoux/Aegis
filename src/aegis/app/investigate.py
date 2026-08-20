@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -45,32 +46,59 @@ def investigate(request: InvestigationRequest, run_context: RunContext) -> Incid
     emitted.  Exceptions, including provenance, turn-limit, and transport
     failures, intentionally propagate to the caller after that cleanup.
     """
-    mcp_process: Any | None = None
     failure: BaseException | None = None
     try:
-        result = asyncio.run(run_agent(request.brief(), run_context, Settings()))
+        result = asyncio.run(_run_with_transport(request.brief(), run_context, Settings()))
         return result.summary
     except BaseException as exc:
-        failure = exc
-        raise
+        failure = _unwrap_solo_group(exc)
+        raise failure from None
     finally:
-        try:
-            _terminate_process(mcp_process)
-        finally:
-            payload: dict[str, str] = {"status": "completed" if failure is None else "failed"}
-            if failure is not None:
-                payload["error_type"] = type(failure).__name__
-            run_context.emit(TraceEvent(kind="terminal", payload=payload))
+        payload: dict[str, str] = {"status": "completed" if failure is None else "failed"}
+        if failure is not None:
+            payload["error_type"] = type(failure).__name__
+        run_context.emit(TraceEvent(kind="terminal", payload=payload))
 
 
-def _terminate_process(process: Any | None) -> None:
-    """Terminate a spawned MCP subprocess when the future runtime supplies one."""
-    if process is not None:
-        process.terminate()
+def _unwrap_solo_group(exc: BaseException) -> BaseException:
+    """Return the single meaningful exception inside nested task groups.
+
+    ``stdio_client`` and ``ClientSession`` each open an anyio task group, so a
+    ProvenanceError raised inside the transport arrives as
+    ``ExceptionGroup(ExceptionGroup(ProvenanceError))``. Without unwrapping, the
+    documented contract that these propagate to the caller is false: nothing
+    catching ``ProvenanceError`` would ever match. Groups carrying more than one
+    exception are left intact, because collapsing them would discard failures.
+    """
+    current = exc
+    while isinstance(current, BaseExceptionGroup) and len(current.exceptions) == 1:
+        current = current.exceptions[0]
+    return current
+
+
+async def _run_with_transport(
+    brief: str, run_context: RunContext, settings: Settings
+) -> AgentResult:
+    """Spawn the MCP server, run the agent against its tools, and tear it down.
+
+    Teardown is the ``mcp_tools`` context manager exiting, which happens on
+    every path including turn-limit and provenance failures. An earlier version
+    held a subprocess handle that was never assigned, so its ``finally`` cleanup
+    was a no-op guarding a subprocess that was never spawned -- and the agent
+    ran with no tools at all.
+    """
+    from aegis.agent.transport import mcp_tools  # noqa: PLC0415
+
+    async with mcp_tools(settings) as tools:
+        return await run_agent(brief, run_context, settings, tools=tools)
 
 
 async def run_agent(
-    brief: str, run_context: RunContext, settings: Settings
+    brief: str,
+    run_context: RunContext,
+    settings: Settings,
+    *,
+    tools: Iterable[Any] = (),
 ) -> AgentResult:
     """Defer importing the loop to avoid its public exception-type cycle.
 
@@ -81,7 +109,7 @@ async def run_agent(
     """
     from aegis.agent.loop import run_agent as execute_agent
 
-    return await execute_agent(brief, run_context, settings)
+    return await execute_agent(brief, run_context, settings, tools=tools)
 
 
 def build_investigation_request(scenario: dict[str, Any]) -> InvestigationRequest:
