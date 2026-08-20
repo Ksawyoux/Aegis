@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from aegis.mcp_server.citations import (
     format_commit,
@@ -127,6 +128,19 @@ def window() -> ResolvedWindow:
     return ResolvedWindow(start=NOW, end=NOW + timedelta(minutes=5), snapped=False)
 
 
+def postmortem() -> PostmortemHit:
+    return PostmortemHit(
+        cite=format_postmortem("outage", "f" * 64, 0),
+        resolution_cite=format_postmortem("outage", "f" * 64, 1),
+        slug="outage",
+        title="Outage",
+        occurred_at=NOW,
+        snippet="snippet",
+        resolution_md="resolution",
+        similarity=0.8,
+    )
+
+
 @pytest.mark.parametrize(
     ("factory", "field"),
     [
@@ -146,8 +160,10 @@ def window() -> ResolvedWindow:
         ),
     ],
 )
-def test_aggregate_models_reject_empty_source_cites(factory: object, field: str) -> None:
-    model = factory()  # type: ignore[operator]
+def test_aggregate_models_reject_empty_source_cites(
+    factory: Callable[[], BaseModel], field: str
+) -> None:
+    model = factory()
     with pytest.raises(ValidationError):
         type(model)(**{**model.model_dump(), field: []})
 
@@ -159,29 +175,20 @@ def test_aggregate_models_reject_empty_source_cites(factory: object, field: str)
         lambda: commit().model_copy(update={"cite": "bad"}),
         lambda: deployment().model_copy(update={"cite": "bad"}),
         lambda: infra().model_copy(update={"cite": "bad"}),
-        lambda: PostmortemHit(
-            cite="bad",
-            resolution_cite=None,
-            slug="outage",
-            title="Outage",
-            occurred_at=NOW,
-            snippet="snippet",
-            resolution_md=None,
-            similarity=0.8,
-        ),
+        lambda: postmortem().model_copy(update={"cite": "bad"}),
     ],
 )
-def test_every_cite_field_rejects_malformed_citations(factory: object) -> None:
+def test_every_cite_field_rejects_malformed_citations(factory: Callable[[], BaseModel]) -> None:
     with pytest.raises(ValidationError):
-        value = factory()  # type: ignore[operator]
-        if isinstance(value, BaseException):
-            raise value
+        value = factory()
         type(value).model_validate(value.model_dump())
 
 
 def test_all_citation_list_fields_reject_malformed_citations() -> None:
+    payload = anomaly().model_dump()
+    payload["source_cites"] = ["bad"]
     with pytest.raises(ValidationError):
-        anomaly(source_cites=["bad"])  # type: ignore[call-arg]
+        TemplateAnomaly.model_validate(payload)
 
 
 def test_ordering_keys_sort_the_documented_orders() -> None:
@@ -197,11 +204,24 @@ def test_ordering_keys_sort_the_documented_orders() -> None:
     ]
 
     series = [
-        SeriesPoint(bucket_start=NOW + timedelta(minutes=1), status_class="4xx", count=1, source_cites=[rollup_cite(minute=1, status="4xx")]),
+        SeriesPoint(
+            bucket_start=NOW + timedelta(minutes=1),
+            status_class="4xx",
+            count=1,
+            source_cites=[rollup_cite(minute=1, status="4xx")],
+        ),
         SeriesPoint(bucket_start=NOW, status_class="5xx", count=1, source_cites=[rollup_cite()]),
-        SeriesPoint(bucket_start=NOW, status_class="4xx", count=1, source_cites=[rollup_cite(status="4xx")]),
+        SeriesPoint(
+            bucket_start=NOW,
+            status_class="4xx",
+            count=1,
+            source_cites=[rollup_cite(status="4xx")],
+        ),
     ]
-    assert [(item.bucket_start, item.status_class) for item in sorted(series, key=series_order_key)] == [
+    ordered_series = [
+        (item.bucket_start, item.status_class) for item in sorted(series, key=series_order_key)
+    ]
+    assert ordered_series == [
         (NOW, "4xx"),
         (NOW, "5xx"),
         (NOW + timedelta(minutes=1), "4xx"),
@@ -243,7 +263,9 @@ def test_ordering_keys_sort_the_documented_orders() -> None:
 
 def test_two_pool_ranking_keeps_new_5xx_and_negative_delta_last() -> None:
     new_5xx = anomaly(template_hash="1" * 32, status="5xx", count=2, baseline_count=0)
-    noisy_4xx = anomaly(template_hash="2" * 32, status="4xx", level="warning", count=100, baseline_count=1)
+    noisy_4xx = anomaly(
+        template_hash="2" * 32, status="4xx", level="warning", count=100, baseline_count=1
+    )
     declining_5xx = anomaly(template_hash="3" * 32, status="5xx", count=1, baseline_count=8)
 
     ranked = rank_top_templates([declining_5xx, noisy_4xx, new_5xx], top_n=2)

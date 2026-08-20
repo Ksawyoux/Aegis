@@ -8,7 +8,7 @@ the evidence returned for this particular response.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any, Self, TypeAlias
 
