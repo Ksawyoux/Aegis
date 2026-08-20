@@ -3,17 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime settings loaded from ``AEGIS_``-prefixed environment variables."""
+    """Runtime settings loaded from the process environment and local ``.env``."""
 
-    model_config = SettingsConfigDict(env_prefix="AEGIS_", frozen=True)
+    # A developer's dotenv may contain settings owned by other local tools.
+    model_config = SettingsConfigDict(
+        env_prefix="AEGIS_", env_file=".env", extra="ignore", frozen=True
+    )
 
     database_url: str = "postgresql+psycopg://aegis:aegis@localhost:5433/aegis"
     ollama_base_url: str = "http://localhost:11434"
-    embedding_model: str = "bge-m3"
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENAI_API_KEY", "AEGIS_OPENAI_API_KEY"),
+    )
+    embedding_model: str = "text-embedding-3-small"
     anthropic_model: str = "claude-opus-5"
     agent_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     # Aggregates-only tool access means one telemetry call per service to
