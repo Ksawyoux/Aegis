@@ -91,4 +91,13 @@ def test_openai_configuration_defaults_are_part_2_values(
 
     assert settings.openai_base_url == "https://api.openai.com/v1"
     assert settings.embedding_model == "text-embedding-3-small"
-    assert settings.ollama_base_url == "http://localhost:11434"
+
+
+def test_ollama_is_not_a_v1_dependency() -> None:
+    """Revision 3 of Part 2 replaced Ollama with OpenAI; the stale field is gone.
+
+    A legacy ``AEGIS_OLLAMA_BASE_URL`` in an operator's shell must remain
+    harmless -- settings ignore unrelated environment values -- rather than
+    resurrecting a field nothing reads.
+    """
+    assert "ollama_base_url" not in Settings.model_fields

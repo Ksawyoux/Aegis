@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from typer.testing import CliRunner
 
 from aegis.agent.summary import Claim, IncidentSummary, TimelineEntry
+from aegis.agent.trace_view import RunNotFoundError, StoredRun, TraceIntegrityError
 from aegis.app.investigate import build_investigation_request
 from aegis.app.render import render_markdown
 from aegis.cli import app
@@ -192,3 +195,103 @@ def test_rendered_markdown_omits_empty_optional_sections() -> None:
     assert "## Ruled out" not in markdown
     assert "## Similar incidents" not in markdown
     assert "## Timeline" not in markdown
+@dataclass
+class _FakeRecord:
+    run_id: str
+    summary: Any = None
+    trace: list[dict[str, Any]] | None = None
+    delivery: Any = None
+
+    def __post_init__(self) -> None:
+        if self.trace is None:
+            self.trace = [{"kind": "terminal", "payload": {"status": "failed"}}]
+
+    def model_dump(self, mode: str = "python") -> dict[str, Any]:
+        del mode
+        return {
+            "run_id": self.run_id,
+            "summary": self.summary,
+            "trace": self.trace,
+            "delivery": self.delivery,
+        }
+
+
+class _FakeEngine:
+    def dispose(self) -> None:
+        return None
+
+
+def _patch_engine(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setattr("aegis.cli.create_database_engine", lambda *_a, **_k: _FakeEngine())
+
+
+def test_trace_command_exits_1_when_run_id_is_not_found(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _patch_engine(monkeypatch)
+
+    def _raise(*_args: object, **_kwargs: object) -> StoredRun:
+        raise RunNotFoundError("no persisted incident carries run_id 'missing'")
+
+    monkeypatch.setattr("aegis.cli.load_stored_run", _raise)
+
+    result = runner.invoke(app, ["trace", "--run-id", "missing"])
+
+    assert result.exit_code == 1
+    assert "no persisted incident" in result.output
+
+
+def test_trace_command_exits_2_when_run_id_is_not_unique(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _patch_engine(monkeypatch)
+
+    def _raise(*_args: object, **_kwargs: object) -> StoredRun:
+        raise TraceIntegrityError("run_id is not unique")
+
+    monkeypatch.setattr("aegis.cli.load_stored_run", _raise)
+
+    result = runner.invoke(app, ["trace", "--run-id", "dup"])
+
+    assert result.exit_code == 2
+    assert "run_id is not unique" in result.output
+
+
+def test_trace_command_renders_then_exits_2_on_a_poisoned_summary(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    _patch_engine(monkeypatch)
+    run = StoredRun(
+        incident_id=1,
+        dedup_key="demo-eval:x",
+        incident_status="summarized",
+        record=_FakeRecord(run_id="poisoned-run"),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("aegis.cli.load_stored_run", lambda *_a, **_k: run)
+
+    def _raise_integrity(*_args: object, **_kwargs: object) -> None:
+        raise TraceIntegrityError("citations not found in any captured tool result")
+
+    monkeypatch.setattr("aegis.cli.validate_trace_integrity", _raise_integrity)
+
+    result = runner.invoke(app, ["trace", "--run-id", "poisoned-run"])
+
+    assert result.exit_code == 2
+    # The trace is still rendered before the integrity failure is reported.
+    assert "Run poisoned-run" in result.output
+    assert "citations not found" in result.output
+
+
+def test_trace_command_json_output_emits_the_stored_envelope(
+    monkeypatch,
+) -> None:  # type: ignore[no-untyped-def]
+    _patch_engine(monkeypatch)
+    run = StoredRun(
+        incident_id=7,
+        dedup_key="demo-eval:y",
+        incident_status="failed",
+        record=_FakeRecord(run_id="json-run"),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr("aegis.cli.load_stored_run", lambda *_a, **_k: run)
+    monkeypatch.setattr("aegis.cli.validate_trace_integrity", lambda *_a, **_k: None)
+
+    result = runner.invoke(app, ["trace", "--run-id", "json-run", "--json"])
+
+    assert result.exit_code == 0
+    assert '"run_id": "json-run"' in result.output

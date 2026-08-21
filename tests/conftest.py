@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 from pathlib import Path
 
@@ -32,6 +33,11 @@ def postgres_engine() -> Generator[Engine]:
             connection.execute(text("SELECT 1"))
     except SQLAlchemyError:
         engine.dispose()
+        # AEGIS_REQUIRE_POSTGRES=1 is `make demo`'s strict mode (Part 4 §3.2):
+        # a database outage must fail the release gate loudly, not vanish as a
+        # skip that lets `pytest -q` exit zero while covering nothing real.
+        if os.environ.get("AEGIS_REQUIRE_POSTGRES") == "1":
+            raise
         pytest.skip("postgres unavailable")
 
     upgrade_head(engine)

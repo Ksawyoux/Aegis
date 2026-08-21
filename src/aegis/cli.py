@@ -15,6 +15,13 @@ from alembic.config import Config
 from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
+from aegis.agent.trace_view import (
+    RunNotFoundError,
+    TraceIntegrityError,
+    load_stored_run,
+    render_trace,
+    validate_trace_integrity,
+)
 from aegis.api.app import create_app
 from aegis.app.investigate import build_investigation_request
 from aegis.app.investigate import investigate as run_investigation
@@ -165,6 +172,48 @@ def investigate_command(
     summary = run_investigation(request, RunContext(uuid4().hex, InMemorySink()))
     typer.echo(render_markdown(summary))
     typer.echo(json.dumps(summary.model_dump(mode="json"), indent=2, sort_keys=True))
+
+
+@app.command("trace")
+def trace_command(
+    run_id: str = typer.Option(..., "--run-id"),
+    json_output: bool = typer.Option(False, "--json"),
+    full: bool = typer.Option(False, "--full"),
+) -> None:
+    """Render a persisted investigation's stored tool-call trace (read-only).
+
+    Exits 1 when no incident carries ``run_id``, and 2 when the stored
+    envelope fails integrity validation -- after printing whatever could be
+    rendered, so a missing citation or malformed envelope is still visible
+    rather than hidden behind a bare non-zero exit.
+    """
+    settings = Settings()
+    engine = create_database_engine(settings)
+    try:
+        with Session(engine) as session:
+            try:
+                run = load_stored_run(session, run_id=run_id)
+            except RunNotFoundError as error:
+                typer.echo(str(error), err=True)
+                raise typer.Exit(code=1) from error
+            except TraceIntegrityError as error:
+                typer.echo(str(error), err=True)
+                raise typer.Exit(code=2) from error
+    finally:
+        engine.dispose()
+
+    if json_output:
+        typer.echo(
+            json.dumps(run.record.model_dump(mode="json"), indent=2, sort_keys=True)
+        )
+    else:
+        typer.echo(render_trace(run, include_payloads=full))
+
+    try:
+        validate_trace_integrity(run)
+    except TraceIntegrityError as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=2) from error
 
 
 def _load_scenario(path: Path) -> dict[str, object]:

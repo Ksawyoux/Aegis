@@ -16,7 +16,6 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+psycopg://aegis:aegis@localhost:5433/aegis"
-    ollama_base_url: str = "http://localhost:11434"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: SecretStr | None = Field(
         default=None,
