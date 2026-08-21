@@ -86,6 +86,13 @@ class OpenAIEmbeddings:
         if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
             raise ValueError("malformed embeddings response")
         rows = payload["data"]
+        # A row count check is not redundant with the index-set check below: a
+        # response of indices [0, 0, 1] for two inputs satisfies the set
+        # comparison, and the repeated key silently overwrites input 0 with
+        # input 1's vector. Every downstream similarity is then computed against
+        # the wrong text, with nothing to signal it.
+        if len(rows) != count:
+            raise ValueError("embeddings response returned a different number of rows than inputs")
         indexed: dict[int, list[float]] = {}
         for row in rows:
             if (
@@ -99,6 +106,8 @@ class OpenAIEmbeddings:
                 isinstance(item, int | float) and not isinstance(item, bool) for item in vector
             ):
                 raise ValueError("embedding has non-numeric component")
+            if row["index"] in indexed:
+                raise ValueError("embeddings response repeated an index")
             indexed[row["index"]] = [float(item) for item in vector]
         if set(indexed) != set(range(count)):
             raise ValueError("embeddings response indices do not match inputs")

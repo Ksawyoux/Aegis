@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from aegis.api.github import router as github_router
 from aegis.api.health import router as health_router
 from aegis.api.webhooks import router as webhook_router
 from aegis.config import Settings
@@ -30,4 +31,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(lifespan=lifespan)
     app.include_router(health_router)
     app.include_router(webhook_router)
+    app.include_router(github_router)
     return app
