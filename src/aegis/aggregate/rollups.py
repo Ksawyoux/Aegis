@@ -65,6 +65,37 @@ def capture_dirty_set(session: Session, *, changed: Iterable[DirtyPair]) -> Dirt
     return frozenset(changed_pairs | _normalise_dirty_pairs(existing_pairs))
 
 
+def delete_rollups(session: Session, *, dirty: DirtySet) -> int:
+    """Delete the rollups covering ``dirty`` before their base rows are removed.
+
+    ``error_rollups.exemplar_log_event_id`` is ``ON DELETE RESTRICT``, so any
+    caller that deletes a ``log_events`` row must first remove the rollups that
+    might cite it. A replaced row is frequently its own exemplar, which makes
+    this the common case rather than the corner one, and the failure is a
+    transaction-aborting IntegrityError rather than anything localised.
+
+    ``recompute`` performs the same deletion, but it must run *after* the base
+    rows change; this exists for the window before that.
+    """
+    dirty_pairs = _normalise_dirty_pairs(dirty)
+    if not dirty_pairs:
+        return 0
+    _load_dirty_pairs(session, dirty_pairs)
+    return len(
+        session.execute(
+            text(
+                """
+                DELETE FROM error_rollups AS rollup
+                USING aegis_dirty_rollup_minutes AS dirty
+                WHERE rollup.service_id = dirty.service_id
+                  AND rollup.bucket_start = dirty.bucket_start
+                RETURNING 1
+                """
+            )
+        ).all()
+    )
+
+
 def recompute(session: Session, *, dirty: DirtySet) -> RollupReport:
     """Delete and exactly rebuild rollups for an explicit pre-captured dirty set.
 

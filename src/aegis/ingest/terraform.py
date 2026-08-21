@@ -119,6 +119,17 @@ def _diff(before: Any, after: Any, unknown: Any, sensitive: Any) -> dict[str, An
         return {"before": "<redacted>", "after": "<redacted>"}
     if unknown is True:
         return {}
+    if isinstance(before, list) or isinstance(after, list):
+        # Terraform marks sensitivity element-wise inside a list, and list order
+        # is not stable between plans, so recursing positionally could pair a
+        # secret element with a non-secret one. Redacting the whole list is the
+        # only reduction that cannot leak; an over-redacted diff is recoverable,
+        # a persisted credential is not.
+        if _contains_sensitive(sensitive):
+            return {"before": "<redacted>", "after": "<redacted>"} if before != after else {}
+        if before != after:
+            return {"before": before, "after": after}
+        return {}
     if isinstance(before, dict) or isinstance(after, dict):
         result: dict[str, Any] = {}
         keys = set(before if isinstance(before, dict) else {}) | set(
@@ -139,9 +150,30 @@ def _diff(before: Any, after: Any, unknown: Any, sensitive: Any) -> dict[str, An
     return {}
 
 
+def _contains_sensitive(value: object) -> bool:
+    """Return whether any node in a sensitivity subtree is marked sensitive."""
+    if value is True:
+        return True
+    if isinstance(value, dict):
+        return any(_contains_sensitive(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_sensitive(item) for item in value)
+    return False
+
+
 def _merge_sensitive(before: object, after: object) -> object:
     if before is True or after is True:
         return True
+    if isinstance(before, list) or isinstance(after, list):
+        before_items: list[Any] = before if isinstance(before, list) else []
+        after_items: list[Any] = after if isinstance(after, list) else []
+        return [
+            _merge_sensitive(
+                before_items[index] if index < len(before_items) else None,
+                after_items[index] if index < len(after_items) else None,
+            )
+            for index in range(max(len(before_items), len(after_items)))
+        ]
     if isinstance(before, dict) or isinstance(after, dict):
         left = before if isinstance(before, dict) else {}
         right = after if isinstance(after, dict) else {}

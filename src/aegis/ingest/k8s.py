@@ -12,7 +12,7 @@ from typing import Any, TypeAlias
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from aegis.aggregate.rollups import capture_dirty_set, recompute
+from aegis.aggregate.rollups import capture_dirty_set, delete_rollups, recompute
 from aegis.db.models import LogEvent
 from aegis.ingest.identity import k8s_event_uid, k8s_pod_uid
 from aegis.ingest.logs import ResolvedDraft
@@ -35,8 +35,13 @@ def ingest_kubernetes(session: Session, *, path: Path, registry: ServiceRegistry
         if path.name == "pod-status.json"
         else _event_records(items, path, registry)
     )
+    # Read every row this batch touches before deleting anything. The rollups
+    # citing a replaced Event must be gone before it is, because
+    # error_rollups.exemplar_log_event_id is ON DELETE RESTRICT and a replaced
+    # Event is usually its own exemplar. Interleaving reads and deletes also
+    # lets an autoflush fire the delete early, inside a later SELECT.
     dirty: set[tuple[int, datetime]] = set()
-    inserted = 0
+    planned: list[tuple[LogEvent | None, ResolvedDraft, bool]] = []
     for record, event_key in records:
         old = None
         if event_key is not None:
@@ -48,16 +53,37 @@ def ingest_kubernetes(session: Session, *, path: Path, registry: ServiceRegistry
         if old is not None:
             if old.uid == record.uid:
                 continue
+            if _is_stale_snapshot(old, record):
+                # A Kubernetes Event count only ever rises for one event_uid, so a
+                # lower count is an older snapshot arriving late. Applying it would
+                # discard occurrences the database already recorded.
+                continue
             dirty.add((old.service_id, _minute(old.ts)))
-            session.delete(old)
-        existing = session.scalar(select(LogEvent).where(LogEvent.uid == record.uid))
-        if existing is None:
-            session.add(_event(record))
+        is_new = session.scalar(select(LogEvent.id).where(LogEvent.uid == record.uid)) is None
+        if is_new:
             dirty.add((record.service_id, _minute(record.ts)))
+        planned.append((old, record, is_new))
+
+    captured = capture_dirty_set(session, changed=dirty)
+    delete_rollups(session, dirty=captured)
+
+    inserted = 0
+    for old, record, is_new in planned:
+        if old is not None:
+            session.delete(old)
+        if is_new:
+            session.add(_event(record))
             inserted += 1
     session.flush()
-    recompute(session, dirty=capture_dirty_set(session, changed=dirty))
+    recompute(session, dirty=captured)
     return inserted
+
+
+def _is_stale_snapshot(old: LogEvent, record: ResolvedDraft) -> bool:
+    """Return whether ``record`` carries fewer occurrences than the stored row."""
+    stored = old.attrs.get("occurrence_count")
+    incoming = record.attrs.get("occurrence_count")
+    return isinstance(stored, int) and isinstance(incoming, int) and incoming < stored
 
 
 def _items(path: Path) -> list[tuple[int, bytes, dict[str, Any]]]:

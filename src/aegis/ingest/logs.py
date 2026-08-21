@@ -388,9 +388,28 @@ class PythonTracebackFormat:
         yield  # pragma: no cover
 
     def finish(self) -> Iterable[Draft]:
+        """Emit the open record only if it is complete.
+
+        A record's identity is derived from the concatenation of all its lines,
+        so emitting a traceback before its exception line has arrived assigns a
+        uid that the completed record will not share. Appending the missing
+        line and re-ingesting then inserts a second row beside the first,
+        doubling the evidence and every rollup count derived from it.
+
+        ``state == "traceback"`` means the traceback header was seen and the
+        terminating exception line was not, which only happens when the file
+        ends mid-traceback. Dropping that record is recoverable -- the bytes are
+        still in the file and are re-read on the next ingest -- while a
+        duplicated one is not.
+        """
         if self._record is None or self._ctx is None:
             return ()
         record, self._record = self._record, None
+        if record.state == "traceback":
+            # Cleared before returning: FORMATS holds one stateful instance that
+            # every file shares, so leaving the partial record in place would
+            # carry it into the next file and emit it under that file's context.
+            return ()
         return (self._draft(record, self._ctx),)
 
     def _draft(self, record: _TraceRecord, ctx: ParseContext) -> Draft:
