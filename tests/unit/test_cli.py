@@ -7,7 +7,8 @@ from typer.testing import CliRunner
 
 from aegis.agent.summary import Claim, IncidentSummary, TimelineEntry
 from aegis.app.investigate import build_investigation_request
-from aegis.cli import _render_markdown, app
+from aegis.app.render import render_markdown
+from aegis.cli import app
 
 runner = CliRunner()
 
@@ -93,6 +94,20 @@ def test_investigate_command_exits_nonzero_when_application_raises(
     assert result.exit_code != 0
 
 
+def test_serve_api_binds_to_loopback_by_default(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    captured: dict[str, object] = {}
+
+    def fake_run(application: object, *, host: str, port: int) -> None:
+        captured.update(application=application, host=host, port=port)
+
+    monkeypatch.setattr("aegis.cli.uvicorn.run", fake_run)
+    result = runner.invoke(app, ["serve-api"])
+
+    assert result.exit_code == 0
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8000
+
+
 def _rich_summary() -> IncidentSummary:
     """A summary populating every claim-bearing field, including the optional ones."""
     rollup = "rollup:checkout-api/2026-08-19T14:03:00Z/5xx/error/" + "0" * 32
@@ -153,7 +168,7 @@ def _all_citations(summary: IncidentSummary) -> list[str]:
 def test_rendered_markdown_shows_every_citation() -> None:
     """A claim rendered without its evidence is an unsupported assertion."""
     summary = _rich_summary()
-    markdown = _render_markdown(summary)
+    markdown = render_markdown(summary)
 
     citations = _all_citations(summary)
     assert len(citations) == 8
@@ -163,7 +178,7 @@ def test_rendered_markdown_shows_every_citation() -> None:
 
 def test_rendered_markdown_includes_ruled_out_and_similar_incidents() -> None:
     """The distractor reasoning is what the scenario exists to exercise."""
-    markdown = _render_markdown(_rich_summary())
+    markdown = render_markdown(_rich_summary())
 
     assert "## Ruled out" in markdown
     assert "Deploy 3 is not the cause." in markdown
@@ -172,7 +187,7 @@ def test_rendered_markdown_includes_ruled_out_and_similar_incidents() -> None:
 
 
 def test_rendered_markdown_omits_empty_optional_sections() -> None:
-    markdown = _render_markdown(_summary())
+    markdown = render_markdown(_summary())
 
     assert "## Ruled out" not in markdown
     assert "## Similar incidents" not in markdown

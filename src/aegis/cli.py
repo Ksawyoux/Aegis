@@ -8,15 +8,17 @@ from pathlib import Path
 from uuid import uuid4
 
 import typer
+import uvicorn
 import yaml  # type: ignore[import-untyped]
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, func, select
 from sqlalchemy.orm import Session
 
-from aegis.agent.summary import IncidentSummary
+from aegis.api.app import create_app
 from aegis.app.investigate import build_investigation_request
 from aegis.app.investigate import investigate as run_investigation
+from aegis.app.render import render_markdown
 from aegis.app.run_context import InMemorySink, RunContext
 from aegis.config import Settings
 from aegis.db.models import Service, UnresolvedEvent
@@ -148,6 +150,12 @@ def serve_mcp() -> None:
     main()
 
 
+@app.command("serve-api")
+def serve_api(host: str = "127.0.0.1", port: int = 8000) -> None:
+    """Serve the unauthenticated operational API on loopback by default."""
+    uvicorn.run(create_app(), host=host, port=port)
+
+
 @app.command("investigate")
 def investigate_command(
     scenario: Path = typer.Option(..., "--scenario", exists=True, readable=True),
@@ -155,7 +163,7 @@ def investigate_command(
     """Run an investigation described by a scenario and render its result."""
     request = build_investigation_request(_load_scenario(scenario))
     summary = run_investigation(request, RunContext(uuid4().hex, InMemorySink()))
-    typer.echo(_render_markdown(summary))
+    typer.echo(render_markdown(summary))
     typer.echo(json.dumps(summary.model_dump(mode="json"), indent=2, sort_keys=True))
 
 
@@ -284,50 +292,6 @@ def _render_unresolved_report(engine: Engine) -> None:
     typer.echo("unresolved:")
     for reason, count in rows:
         typer.echo(f"  {reason}: {count}")
-
-
-def _render_markdown(summary: IncidentSummary) -> str:
-    """Render the summary so every claim shows the evidence supporting it.
-
-    The markdown is what a human actually reads, so a claim rendered without
-    its citations is an unsupported assertion no matter how complete the JSON
-    beside it is.  ``ruled_out`` carries the reasoning that distinguishes a
-    diagnosis from a guess -- why the other candidate was rejected -- so it is
-    rendered even though it is optional in the model.
-    """
-    lines = [
-        f"# Investigation: {summary.service}",
-        "",
-        "## Root cause",
-        summary.root_cause.statement,
-        _evidence_line(summary.root_cause.cites),
-        "",
-        f"Confidence: {summary.confidence}",
-        "",
-        "## Recommended action",
-        summary.recommended_action,
-    ]
-    if summary.timeline:
-        lines.extend(["", "## Timeline"])
-        for entry in summary.timeline:
-            lines.append(f"- {entry.at.isoformat()}: {entry.what}")
-            lines.append(f"  {_evidence_line(entry.cites)}")
-    for heading, claims in (
-        ("Ruled out", summary.ruled_out),
-        ("Similar incidents", summary.similar_incidents),
-    ):
-        if not claims:
-            continue
-        lines.extend(["", f"## {heading}"])
-        for claim in claims:
-            lines.append(f"- {claim.statement}")
-            lines.append(f"  {_evidence_line(claim.cites)}")
-    return "\n".join(lines)
-
-
-def _evidence_line(cites: Sequence[str]) -> str:
-    """Render citation identifiers verbatim, in the order the agent gave them."""
-    return "Evidence: " + ", ".join(f"`{cite}`" for cite in cites)
 
 
 __all__ = ["app", "build_investigation_request"]
