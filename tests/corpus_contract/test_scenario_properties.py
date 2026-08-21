@@ -34,7 +34,23 @@ def test_generator_is_byte_identical_across_two_fresh_outputs(tmp_path: Path) ->
     generate(first)
     generate(second)
 
-    for relative_path in (Path("logs/checkout-api.log"), Path("git/checkout.json")):
+    generated_paths = (
+        Path("logs/checkout-api.log"),
+        Path("logs/payments-api.log"),
+        Path("logs/search-api.log"),
+        Path("logs/auth-api.log"),
+        Path("logs/cdn-api.log"),
+        Path("git/checkout.json"),
+        Path("git/search.json"),
+        Path("git/auth.json"),
+        Path("git/cdn.json"),
+        Path("terraform/plan-payments-pool.json"),
+        Path("terraform/plan-cdn-cache.json"),
+        Path("terraform/applies.json"),
+        Path("k8s/pod-status.json"),
+        Path("k8s/events.json"),
+    )
+    for relative_path in generated_paths:
         assert (first / relative_path).read_bytes() == (second / relative_path).read_bytes()
         assert (first / relative_path).read_bytes() == (CORPUS / relative_path).read_bytes()
 

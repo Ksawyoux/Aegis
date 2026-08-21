@@ -3,8 +3,30 @@ alert:
   service: cdn-api
   alert_name: CacheMisses
   dedup_key: pd-cdn-cache-0001
-  fired_at: 2026-08-20T21:10:00Z
-  window_start: 2026-08-20T20:40:00Z
-  window_end: 2026-08-20T21:15:00Z
+  fired_at: "2026-08-20T21:10:00Z"
+  window_start: "2026-08-20T20:40:00Z"
+  window_end: "2026-08-20T21:15:00Z"
   payload: {summary: "cdn cache misses", severity: critical}
-expect: {service: cdn-api, root_cause_contains: [cache], must_cite: [], reachability: []}
+expect:
+  service: cdn-api
+  root_cause_contains: [cache, TTL]
+  must_cite:
+    - "infra:faf483cf69be79c3100f9df757b4f36a"
+    - "rollup:cdn-api/2026-08-20T21:03:00Z/5xx/error/fdf40384d296484f64dc229bd0514234"
+  ruled_out_contains: ["1111111111111111111111111111111111111111"]
+  forbidden_root_cause: ["1111111111111111111111111111111111111111"]
+  min_confidence: medium
+  canary: GROUND-TRUTH-CANARY-DO-NOT-LEAK
+  reachability:
+    - fact: Terraform reduced the CDN default TTL from 3600 seconds to zero
+      tool: get_incident_diff
+      field: focus.infra_changes[].attribute_diff.default_ttl.after
+      value_predicate: "== 0"
+    - fact: the unrelated compression deploy is present in the window
+      tool: get_incident_diff
+      field: focus.deployments[].commit.sha
+      value_contains: ["1111111111111111111111111111111111111111"]
+    - fact: origin timeout responses rose above baseline
+      tool: get_error_telemetry
+      field: top_templates[].delta
+      value_predicate: "> 0"

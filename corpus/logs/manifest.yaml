@@ -10,6 +10,7 @@ search-api.log:
   service: search-api
   format: python-traceback
   timezone: UTC
+  sealed: true
 auth-api.log:
   service: auth-api
   format: nginx

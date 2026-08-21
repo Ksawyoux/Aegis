@@ -3,8 +3,26 @@ alert:
   service: auth-api
   alert_name: TokenExpiry
   dedup_key: pd-auth-token-0001
-  fired_at: 2026-08-20T14:10:00Z
-  window_start: 2026-08-20T13:40:00Z
-  window_end: 2026-08-20T14:15:00Z
+  fired_at: "2026-08-20T14:10:00Z"
+  window_start: "2026-08-20T13:40:00Z"
+  window_end: "2026-08-20T14:15:00Z"
   payload: {summary: "authentication failures", severity: warning}
-expect: {service: auth-api, root_cause_contains: [token], must_cite: [], reachability: []}
+expect:
+  service: auth-api
+  root_cause_contains: [token, "<="]
+  must_cite:
+    - "commit:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    - "rollup:auth-api/2026-08-20T14:03:00Z/4xx/warning/2a88ec5ee0ba190adbba9d4f7db6e357"
+  ruled_out_contains: [ffffffffffffffffffffffffffffffffffffffff]
+  forbidden_root_cause: [ffffffffffffffffffffffffffffffffffffffff]
+  min_confidence: medium
+  canary: GROUND-TRUTH-CANARY-DO-NOT-LEAK
+  reachability:
+    - fact: the neutral refactor changed the token boundary from less-than to less-than-or-equal
+      tool: get_incident_diff
+      field: focus.deployments[].commit.files_changed[].hunks
+      value_contains: ["expires_at < now", "expires_at <= now"]
+    - fact: token refresh 401 responses rose above baseline
+      tool: get_error_telemetry
+      field: top_templates[].delta
+      value_predicate: "> 0"

@@ -1,0 +1,31 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "module.cdn.aws_cloudfront_cache_policy.assets",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "after": {
+          "default_ttl": 0,
+          "tags": {
+            "service": "cdn-api"
+          }
+        },
+        "after_sensitive": {},
+        "after_unknown": {},
+        "before": {
+          "default_ttl": 3600,
+          "tags": {
+            "service": "cdn-api"
+          }
+        },
+        "before_sensitive": {}
+      },
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "type": "aws_cloudfront_cache_policy"
+    }
+  ],
+  "terraform_version": "1.9.3"
+}

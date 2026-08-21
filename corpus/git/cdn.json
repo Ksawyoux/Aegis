@@ -1,0 +1,31 @@
+{
+  "commits": [
+    {
+      "author": "Maya Brooks",
+      "authored_at": "2026-08-20T20:52:00Z",
+      "committed_at": "2026-08-20T20:53:00Z",
+      "files_changed": [
+        {
+          "additions": 1,
+          "deletions": 0,
+          "hunks": "@@ -5,3 +5,4 @@ compression:\n   gzip on;\n+  brotli on;\n",
+          "path": "nginx/compression.conf",
+          "status": "modified"
+        }
+      ],
+      "message": "enable brotli responses",
+      "pr_number": 944,
+      "sha": "1111111111111111111111111111111111111111"
+    }
+  ],
+  "deploys": [
+    {
+      "commit_sha": "1111111111111111111111111111111111111111",
+      "environment": "production",
+      "finished_at": "2026-08-20T20:56:00Z",
+      "started_at": "2026-08-20T20:55:00Z",
+      "status": "success"
+    }
+  ],
+  "repo": "acme/cdn"
+}

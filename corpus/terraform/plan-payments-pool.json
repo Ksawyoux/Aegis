@@ -1,0 +1,27 @@
+{
+  "format_version": "1.2",
+  "resource_changes": [
+    {
+      "address": "module.payments.aws_db_parameter.pool_max_connections",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "after": null,
+        "after_sensitive": {},
+        "after_unknown": {},
+        "before": {
+          "name": "max_connections",
+          "tags": {
+            "service": "payments-api"
+          },
+          "value": "100"
+        },
+        "before_sensitive": {}
+      },
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "type": "aws_db_parameter"
+    }
+  ],
+  "terraform_version": "1.9.3"
+}
