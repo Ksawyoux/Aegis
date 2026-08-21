@@ -59,7 +59,7 @@ def receive_alert(
     raw_payload["dedup_source"] = source
     engine: Engine = request.app.state.engine
     settings: Settings = request.app.state.settings
-    investigation = InvestigationRequest.model_validate(alert.model_dump())
+    investigation = _investigation_from(alert)
 
     with Session(engine) as session, session.begin():
         service_id = session.scalar(select(Service.id).where(Service.name == alert.service))
@@ -102,6 +102,25 @@ def receive_alert(
         "created": False,
         "run_scheduled": False,
     }
+
+
+def _investigation_from(alert: AlertWebhook) -> InvestigationRequest:
+    """Build the model-safe request from an explicit allowlist.
+
+    ``AlertWebhook`` allows extra fields so provider envelopes survive into
+    ``alert_payload``, while ``InvestigationRequest`` forbids them. Passing
+    ``alert.model_dump()`` straight through therefore fails validation for any
+    alert carrying a provider key -- which is every real one. Listing the fields
+    here also keeps provider metadata out of the agent's brief by construction.
+    """
+    return InvestigationRequest(
+        service=alert.service,
+        alert_name=alert.alert_name,
+        fired_at=alert.fired_at,
+        payload=alert.payload,
+        window_start=alert.window_start,
+        window_end=alert.window_end,
+    )
 
 
 def _existing_incident_id(engine: Engine, dedup_key: str) -> int | None:
