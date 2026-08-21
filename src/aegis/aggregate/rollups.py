@@ -65,6 +65,29 @@ def capture_dirty_set(session: Session, *, changed: Iterable[DirtyPair]) -> Dirt
     return frozenset(changed_pairs | _normalise_dirty_pairs(existing_pairs))
 
 
+def lock_services(session: Session, service_ids: Iterable[int]) -> None:
+    """Take the per-service rollup locks up front, in ascending id order.
+
+    ``recompute`` acquires these itself, but a caller that deletes rollups or
+    locks base rows *before* calling it holds those row locks without holding
+    the advisory lock. Two such callers then deadlock: one holds the row and
+    waits for the advisory lock, the other holds the advisory lock and waits for
+    the row. Acquiring here, before any ``SELECT ... FOR UPDATE``, makes the
+    ordering total. Re-acquiring inside ``recompute`` is free -- the lock is
+    already held by this transaction.
+    """
+    ordered = sorted({int(service_id) for service_id in service_ids})
+    if not ordered:
+        return
+    session.execute(
+        text(
+            "SELECT pg_advisory_xact_lock(hashtext('rollup:' || service_id)) "
+            "FROM unnest(CAST(:service_ids AS bigint[])) AS service_id"
+        ),
+        {"service_ids": ordered},
+    )
+
+
 def delete_rollups(session: Session, *, dirty: DirtySet) -> int:
     """Delete the rollups covering ``dirty`` before their base rows are removed.
 

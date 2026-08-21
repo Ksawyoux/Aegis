@@ -236,11 +236,23 @@ def seeded_engine(migrated_engine: Engine) -> Engine:
     against the small committed corpus, and the ``result`` fixture's cache is
     what actually keeps the paid agent call to exactly one per scenario.
     """
+    import os  # noqa: PLC0415
+
     from sqlalchemy.orm import Session  # noqa: PLC0415
 
     from tests.corpus_contract.test_reachability import (  # noqa: PLC0415
         _seed_committed_corpus,
     )
+
+    # Under `make demo` the release database has already been ingested twice and
+    # its incidents are the deliverable that the run inspects afterwards.
+    # Seeding again collides on the unique service name, and the teardown below
+    # would delete every persisted evaluation before it could be read -- so the
+    # demo would fail either on a duplicate service or on finding zero of the
+    # five incidents it just produced.
+    if os.environ.get("AEGIS_DEMO_MODE") == "1":
+        yield migrated_engine
+        return
 
     with Session(migrated_engine) as session, session.begin():
         _seed_committed_corpus(session)

@@ -346,6 +346,11 @@ class PythonTracebackFormat:
         header = _TRACE_HEADER.match(line.rstrip("\r\n"))
         if header is not None:
             if self._record is not None:
+                # A new header means the previous record's traceback was truncated
+                # in the source. Unlike the end-of-file case, appending cannot
+                # change it, so its identity is stable and emitting is safe -- but
+                # it is marked, because an absent exc_type must not be read as
+                # "this event raised nothing".
                 yield self._draft(self._record, ctx)
             self._record = _TraceRecord(offset, header, [line])
             return
@@ -409,7 +414,22 @@ class PythonTracebackFormat:
             # Cleared before returning: FORMATS holds one stateful instance that
             # every file shares, so leaving the partial record in place would
             # carry it into the next file and emit it under that file's context.
-            return ()
+            #
+            # It is reported as unresolved rather than dropped. Persisting it as
+            # an event would duplicate on re-ingest, because appending the
+            # missing exception line changes the raw value the uid derives from.
+            # Dropping it silently would let a truncated file ingest "cleanly"
+            # forever while losing a real error, so the ingest report names it.
+            raw = "".join(record.raw_lines)
+            return (
+                _unresolved(
+                    log_uid(file=self._ctx.source_file, offset=record.offset, raw=raw),
+                    normalize_raw(raw),
+                    "incomplete_traceback",
+                    record.offset,
+                    self._ctx,
+                ),
+            )
         return (self._draft(record, self._ctx),)
 
     def _draft(self, record: _TraceRecord, ctx: ParseContext) -> Draft:
@@ -434,6 +454,12 @@ class PythonTracebackFormat:
             )
         service = cast(_ResolvedLogService, resolution.service)
         attrs: dict[str, Any] = {"logger": record.header.group("logger")}
+        if record.state == "traceback":
+            # Reached only when a new header cut this record's traceback short.
+            # Without the marker an absent exc_type is indistinguishable from an
+            # event that never raised, and the frames collected so far would be
+            # read as a complete stack.
+            attrs["assembly"] = "incomplete"
         if record.exc_type is not None:
             attrs["exc_type"] = record.exc_type
             detail = "\n".join(record.detail_lines).strip()

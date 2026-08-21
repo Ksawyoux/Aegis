@@ -102,6 +102,19 @@ def test_an_unrelated_signature_does_not_retrieve_a_confident_match(
             provider=provider,
         )
 
+    # A floor that excludes everything is not a working floor, so the related
+    # query is asserted alongside it: all(...) over an empty list is true, and
+    # would pass just as happily if retrieval were broken outright.
+    with Session(migrated_engine) as session:
+        related = search_similar_postmortems(
+            session,
+            error_signature="container terminated by the out of memory killer, exit code 137",
+            provider=provider,
+        )
+    assert related, "retrieval returned nothing even for a clearly related signature"
+
     assert all(hit.similarity < 0.75 for hit in hits), (
         f"unrelated text matched too strongly: {[(h.slug, h.similarity) for h in hits]}"
     )
+    if hits:
+        assert max(hit.similarity for hit in hits) < max(hit.similarity for hit in related)

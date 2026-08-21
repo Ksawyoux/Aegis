@@ -95,3 +95,57 @@ def test_citations_survive_truncation_of_a_very_long_claim() -> None:
     joined = "\n".join(rendered)
     for cite in ("commit:" + "a" * 40, rollup, "deploy:" + "b" * 32):
         assert cite in joined, f"citation dropped by truncation: {cite}"
+
+
+def test_oversized_evidence_drops_whole_citations_and_says_how_many() -> None:
+    """A severed citation is not weaker evidence -- it resolves to nothing.
+
+    Truncating the evidence string mid-identifier produces a token that looks
+    like a citation and is not one, with nothing telling the reader that
+    anything was lost.
+    """
+    cites = [
+        f"rollup:checkout-api/2026-08-19T14:0{index % 10}:00Z/5xx/error/{index:032d}"
+        for index in range(60)
+    ]
+    summary = IncidentSummary(
+        service="checkout-api",
+        root_cause=Claim(statement="The upstream timeout was lowered.", cites=cites),
+        confidence="high",
+        timeline=[],
+        recommended_action="Restore the timeout.",
+    )
+
+    blocks = build_blocks(summary, "run-abc")
+    sections = [b["text"]["text"] for b in blocks if b.get("type") == "section"]
+    root = next(text for text in sections if "*Root cause*" in text)
+
+    assert len(root) <= 3000
+    # Every rendered citation is delimited, so none was cut in half.
+    assert root.count("`") % 2 == 0
+    for token in root.split("`")[1::2]:
+        assert token in cites
+    assert "more in the stored trace" in root
+    assert "The upstream timeout was lowered." in root
+
+
+def test_the_limits_test_subject_is_not_empty() -> None:
+    """Guards the limits assertions above, which an empty message would satisfy.
+
+    ``all(len(t) <= 3000 for t in [])`` is true, so a build_blocks that returned
+    nothing would pass every bound check while publishing no incident at all.
+    """
+    summary = IncidentSummary(
+        service="checkout-api",
+        root_cause=Claim(statement="A timeout caused the spike.", cites=["commit:" + "a" * 40]),
+        confidence="high",
+        timeline=[],
+        recommended_action="Restore the timeout.",
+    )
+
+    blocks = build_blocks(summary, "run-abc")
+    sections = [b for b in blocks if b.get("type") == "section"]
+
+    assert len(sections) >= 2
+    assert any("A timeout caused the spike." in b["text"]["text"] for b in sections)
+    assert any("commit:" + "a" * 40 in b["text"]["text"] for b in sections)

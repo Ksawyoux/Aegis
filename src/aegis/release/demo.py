@@ -555,10 +555,10 @@ def run_offline_demo(options: DemoOptions) -> DemoResult:
     settings = Settings(database_url=options.database_url)
     environment = build_child_environment(options, settings)
 
-    print("[1/10] prerequisites and corpus manifest")
+    print("[1/11] prerequisites and corpus manifest")
     preflight(options)
 
-    print("[2/10] database provisioning and SQL readiness")
+    print("[2/11] database provisioning and SQL readiness")
     if options.database_mode == "compose":
         provision_compose_database(options, environment)
     else:
@@ -566,7 +566,7 @@ def run_offline_demo(options: DemoOptions) -> DemoResult:
     assert_database_is_empty(options.database_url)
     clean_start = True
 
-    print("[3/10] Alembic migration and pgvector verification")
+    print("[3/11] Alembic migration and pgvector verification")
     _run_stage(
         "migration",
         ["uv", "run", "aegis", "db", "upgrade"],
@@ -575,17 +575,40 @@ def run_offline_demo(options: DemoOptions) -> DemoResult:
     )
     verify_migration_and_pgvector(options.database_url)
 
-    print("[4/10] ruff gate")
+    print("[4/11] ruff gate")
     _run_stage(
         "ruff", ["uv", "run", "ruff", "check", "."], root=options.root, environment=environment
     )
 
-    print("[5/10] mypy gate")
+    print("[5/11] mypy gate")
     _run_stage(
         "mypy", ["uv", "run", "mypy", "--strict", "src"], root=options.root, environment=environment
     )
 
-    print("[6/10] corpus ingest pass 1")
+    # The destructive suite runs before the corpus exists, not after. Several
+    # integration tests truncate evidence, insert fixed service names, and one
+    # downgrades the schema to base; run against the just-ingested release
+    # database they either collide on a duplicate service or delete the very
+    # incidents stage 9 inspects. Nothing here depends on the corpus -- these
+    # tests create and destroy their own data -- so ordering is the whole fix.
+    print("[6/11] pytest gate, excluding the live evaluations")
+    _run_stage(
+        "pytest",
+        ["uv", "run", "pytest", "-q", "--ignore=tests/eval"],
+        root=options.root,
+        environment=environment,
+    )
+    # test_migration.py downgrades to base and back; re-assert the head revision
+    # rather than trusting that it restored what it found.
+    _run_stage(
+        "migrate-restore",
+        ["uv", "run", "aegis", "db", "upgrade"],
+        root=options.root,
+        environment=environment,
+    )
+    assert_database_is_empty(options.database_url)
+
+    print("[7/11] corpus ingest pass 1")
     _run_stage(
         "ingest-1",
         ["uv", "run", "aegis", "ingest", "all"],
@@ -599,7 +622,7 @@ def run_offline_demo(options: DemoOptions) -> DemoResult:
         engine.dispose()
     assert_non_zero_source_counts(first_counts)
 
-    print("[7/10] corpus ingest pass 2 and replay digest")
+    print("[8/11] corpus ingest pass 2 and replay digest")
     _run_stage(
         "ingest-2",
         ["uv", "run", "aegis", "ingest", "all"],
@@ -616,10 +639,15 @@ def run_offline_demo(options: DemoOptions) -> DemoResult:
     if second_counts != first_counts:
         raise DemoError("ingest", "evidence counts changed between ingest pass 1 and pass 2")
 
-    print("[8/10] full pytest gate, including five live evaluations")
-    _run_stage("pytest", ["uv", "run", "pytest", "-q"], root=options.root, environment=environment)
+    print("[9/11] five live evaluations against the ingested release database")
+    _run_stage(
+        "pytest-eval",
+        ["uv", "run", "pytest", "-q", "tests/eval"],
+        root=options.root,
+        environment=environment,
+    )
 
-    print("[9/10] persisted trace and evaluation inspection")
+    print("[10/11] persisted trace and evaluation inspection")
     engine = _connect_engine(options.database_url)
     try:
         scenario_results = _read_demo_scenario_results(engine)
@@ -669,7 +697,7 @@ def _read_demo_scenario_results(engine: Engine) -> tuple[ScenarioResult, ...]:
 
 
 def print_completion_report(result: DemoResult) -> None:
-    print("[10/10] scope and completion report")
+    print("[11/11] scope and completion report")
     for scenario in result.scenario_results:
         print(
             f"PASS {scenario.name} confidence={scenario.confidence} "

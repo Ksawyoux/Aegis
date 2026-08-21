@@ -42,24 +42,50 @@ def _drafts(path: Path) -> list[object]:
     return list(iter_drafts(path, ctx))
 
 
-def test_a_file_ending_mid_traceback_emits_no_record(tmp_path: Path) -> None:
+def test_a_file_ending_mid_traceback_reports_unresolved_rather_than_an_event(
+    tmp_path: Path,
+) -> None:
+    """It must be neither persisted as an event nor silently discarded.
+
+    Persisting duplicates on re-ingest, because appending the exception line
+    changes the raw value the uid derives from. Discarding lets a truncated file
+    ingest "cleanly" forever while losing a real error, so it surfaces in the
+    unresolved report instead.
+    """
     path = tmp_path / "search-api.log"
     path.write_text(_PARTIAL, encoding="utf-8")
 
-    assert _drafts(path) == []
-
-
-def test_the_completed_traceback_is_emitted_once_after_the_append(tmp_path: Path) -> None:
-    path = tmp_path / "search-api.log"
-    path.write_text(_PARTIAL, encoding="utf-8")
-    _drafts(path)
-
-    path.write_text(_COMPLETE, encoding="utf-8")
     drafts = _drafts(path)
 
     assert len(drafts) == 1
-    uids = {getattr(draft, "uid", None) for draft in drafts}
-    assert len(uids) == 1
+    assert type(drafts[0]).__name__ == "UnresolvedDraft"
+    assert getattr(drafts[0], "reason", None) == "incomplete_traceback"
+
+
+def test_the_completed_traceback_is_emitted_once_after_the_append(tmp_path: Path) -> None:
+    """The union of both passes must contain exactly one event uid.
+
+    Discarding the first pass would hide the defect entirely: the pre-fix code
+    emitted a partial event there, and only comparing the two passes together
+    shows that the completed record is a second, differently identified row.
+    """
+    path = tmp_path / "search-api.log"
+    path.write_text(_PARTIAL, encoding="utf-8")
+    first = _drafts(path)
+
+    path.write_text(_COMPLETE, encoding="utf-8")
+    second = _drafts(path)
+
+    event_uids = {
+        getattr(draft, "uid", None)
+        for draft in (*first, *second)
+        if type(draft).__name__ != "UnresolvedDraft"
+    }
+    assert len(event_uids) == 1, (
+        "the partial and completed records were persisted under different uids, "
+        "which doubles the evidence and every rollup count derived from it"
+    )
+    assert len(second) == 1
 
 
 def test_a_terminated_traceback_is_still_emitted_at_end_of_file(tmp_path: Path) -> None:
@@ -68,3 +94,23 @@ def test_a_terminated_traceback_is_still_emitted_at_end_of_file(tmp_path: Path) 
     path.write_text(_COMPLETE, encoding="utf-8")
 
     assert len(_drafts(path)) == 1
+
+
+def test_a_new_header_emits_the_truncated_record_but_marks_it(tmp_path: Path) -> None:
+    """A following header makes the traceback final, so the record is stable.
+
+    Unlike the end-of-file case, appending cannot change this record, so it is
+    emitted rather than lost. It is marked because an absent exc_type would
+    otherwise be indistinguishable from an event that never raised, and the
+    frames gathered so far would read as a complete stack.
+    """
+    second_header = "2026-08-20 03:11:00,000 ERROR [search-api] worker: second event\n"
+    path = tmp_path / "search-api.log"
+    path.write_text(_PARTIAL + second_header, encoding="utf-8")
+
+    drafts = _drafts(path)
+
+    assert len(drafts) == 2
+    assert drafts[0].attrs["assembly"] == "incomplete"  # type: ignore[attr-defined]
+    assert "exc_type" not in drafts[0].attrs  # type: ignore[attr-defined]
+    assert "assembly" not in drafts[1].attrs  # type: ignore[attr-defined]

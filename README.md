@@ -55,7 +55,9 @@ an agent that can query freely will eventually retrieve something it cannot cite
 
 ### The ETL pipeline
 
-Every source converges on the same normalisation, in the same order, before anything is written.
+Log and Kubernetes evidence converges on the normalisation below. Git and Terraform share its
+identity and service-resolution rules but not its later stages: neither produces `log_events`, so
+neither is masked or rolled up.
 
 ```mermaid
 flowchart LR
@@ -72,18 +74,23 @@ flowchart LR
 Four properties of that pipeline are load-bearing, and each exists because the obvious alternative
 is wrong:
 
-- **`source_uid` is computed before normalisation, and inserts are `ON CONFLICT DO NOTHING`.** This
-  is what makes a crashed batch replayable. Derive identity after normalisation and a change to
-  normalisation silently changes identity.
+- **`source_uid` is computed before normalisation.** This is what makes a crashed batch replayable;
+  derive identity after normalisation and a change to normalisation silently changes identity. Log
+  events insert `ON CONFLICT DO NOTHING`. The other sources are not append-only and say so:
+  deployments update lifecycle state, Kubernetes replaces a snapshot when its Event count rises,
+  and a postmortem edit deletes and re-inserts its chunks.
 - **Rollups are deleted and recomputed, never upserted.** `ON CONFLICT DO UPDATE SET count =
   EXCLUDED.count` undercounts on any overlapping re-run, and the error is invisible: every number
   the agent saw simply becomes wrong.
 - **Masking is a single pass with sentinels, not sequential substitution.** Run the substitutions in
   sequence and a later branch rewrites an earlier branch's output — the quoted-string rule turns
   `"<URL>"` into `<STR>`, and two identical messages get two hashes.
-- **A row that cannot be attributed to a service goes to `unresolved_events`, not to `NULL`.**
+- **A log line that cannot be attributed to a service goes to `unresolved_events`, not to `NULL`.**
   `log_events.service_id` is part of the rollup primary key, so a nullable one fails on the first
-  unattributable line rather than the thousandth.
+  unattributable line rather than the thousandth. The other sources differ deliberately: an
+  unattributed Terraform apply is still stored, with `service_id` null, because a destroyed
+  resource nobody tagged is still evidence; an unresolvable Kubernetes object is skipped; and
+  malformed Git input raises rather than being stored at all.
 
 Terraform is the sharpest case. `terraform show -json` plan output describes *intended* actions and
 carries neither execution evidence nor a timestamp. Ingesting it as applied state would let the
@@ -125,11 +132,11 @@ planted scenario contracts, or by a human.
 
 | Path | Role |
 | --- | --- |
-| `src/aegis/config.py` | All runtime settings, `AEGIS_`-prefixed, `.env`-backed. The API key is a `SecretStr` so it cannot reach a stored trace. |
+| `src/aegis/config.py` | Runtime settings, `AEGIS_`-prefixed and `.env`-backed, except `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, which are read unprefixed because every other tool already exports them. `openai_api_key` is a `SecretStr` so it cannot reach a stored trace; the Slack and GitHub secrets are not, and should be. |
 | `src/aegis/db/` | The complete schema and its constraints, plus engine construction. Migration 1 creates every table, including ones only later versions read. |
 | `src/aegis/ingest/` | One module per source — `git`, `logs`, `terraform`, `k8s`, `postmortems` — over shared `identity`, `normalize`, `templates`, and `pipeline` primitives. |
 | `src/aegis/aggregate/` | Rollup computation: the delete-and-recompute transaction and its dirty-set capture. |
-| `src/aegis/embeddings/` | The `EmbeddingProvider` protocol, the OpenAI provider, and committed fixture vectors so retrieval logic is testable offline. |
+| `src/aegis/embeddings/` | The `EmbeddingProvider` protocol, the OpenAI provider, and a fixture provider that serves vectors supplied by the caller, so retrieval logic is testable offline. |
 | `src/aegis/mcp_server/` | The three tools, their SQL, their response envelopes, and the citation grammar. |
 | `src/aegis/agent/` | The agent loop, its prompt, the `IncidentSummary` model, provenance validation, MCP transport, Slack delivery, and the stored-trace view. |
 | `src/aegis/app/` | The application boundary — `investigate()`, the run context and its trace sinks, the background runner, and rendering. The CLI and the API are both callers of it. |
@@ -149,10 +156,17 @@ per-milestone implementation specifications are `docs/part-0` through `docs/part
 ## What v1.0 demonstrates
 
 Aegis Context v1.0 is a feasibility demonstration. Five planted scenarios show that one agent can
-correlate pre-ingested deploy, infrastructure, telemetry, and postmortem evidence through three
-aggregate MCP tools. They do not establish that Aegis Context is more accurate, cheaper, faster,
-or more reliable than a multi-agent system. No swarm baseline, matched-budget comparison,
-repeated-trial analysis, or held-out external corpus is included.
+correlate pre-ingested deploy, infrastructure, and telemetry evidence through aggregate MCP tools.
+They do not establish that Aegis Context is more accurate, cheaper, faster, or more reliable than
+a multi-agent system. No swarm baseline, matched-budget comparison, repeated-trial analysis, or
+held-out external corpus is included.
+
+**The scenario contracts do not cover postmortem retrieval.** Every scenario's `must_cite` and
+reachability entries name `get_incident_diff` and `get_error_telemetry` only, so the five
+evaluations would still pass with `search_similar_postmortems` disabled. That is deliberate — a
+scenario must be solvable from primary evidence, or retrieval becomes the thing that passes the
+suite — but it means the third tool is exercised by its own tests rather than by the
+demonstration.
 
 ## What v1.0 does not demonstrate
 

@@ -12,7 +12,12 @@ from typing import Any, TypeAlias
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from aegis.aggregate.rollups import capture_dirty_set, delete_rollups, recompute
+from aegis.aggregate.rollups import (
+    capture_dirty_set,
+    delete_rollups,
+    lock_services,
+    recompute,
+)
 from aegis.db.models import LogEvent
 from aegis.ingest.identity import k8s_event_uid, k8s_pod_uid
 from aegis.ingest.logs import ResolvedDraft
@@ -40,6 +45,11 @@ def ingest_kubernetes(session: Session, *, path: Path, registry: ServiceRegistry
     # error_rollups.exemplar_log_event_id is ON DELETE RESTRICT and a replaced
     # Event is usually its own exemplar. Interleaving reads and deletes also
     # lets an autoflush fire the delete early, inside a later SELECT.
+    # Before any row lock: see lock_services. Every service this batch touches is
+    # known from the parsed records, so the advisory locks can be taken in one
+    # ordered step rather than discovered part-way through.
+    lock_services(session, (record.service_id for record, _ in records))
+
     dirty: set[tuple[int, datetime]] = set()
     planned: list[tuple[LogEvent | None, ResolvedDraft, bool]] = []
     for record, event_key in records:

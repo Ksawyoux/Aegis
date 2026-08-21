@@ -19,12 +19,16 @@ from tests.docs.claim_scope_scan import ROOT, claim_bearing_paragraphs, render_s
 README = ROOT / "README.md"
 SNAPSHOT = Path(__file__).with_name("claim_scope_approved.txt")
 
+# Narrowed deliberately: no scenario's must_cite or reachability contract names
+# search_similar_postmortems, so the five evaluations would pass with the third
+# tool disabled. Claiming they demonstrate postmortem correlation overstated
+# what the contracts check.
 FEASIBILITY_PARAGRAPH = (
     "Aegis Context v1.0 is a feasibility demonstration. Five planted scenarios show that one "
-    "agent can correlate pre-ingested deploy, infrastructure, telemetry, and postmortem evidence "
-    "through three aggregate MCP tools. They do not establish that Aegis Context is more "
-    "accurate, cheaper, faster, or more reliable than a multi-agent system. No swarm baseline, "
-    "matched-budget comparison, repeated-trial analysis, or held-out external corpus is included."
+    "agent can correlate pre-ingested deploy, infrastructure, and telemetry evidence through "
+    "aggregate MCP tools. They do not establish that Aegis Context is more accurate, cheaper, "
+    "faster, or more reliable than a multi-agent system. No swarm baseline, matched-budget "
+    "comparison, repeated-trial analysis, or held-out external corpus is included."
 )
 
 PROVENANCE_PARAGRAPH = (

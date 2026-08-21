@@ -12,6 +12,8 @@ from aegis.app.records import DeliveryOutcome
 from aegis.config import Settings
 
 _SECTION_LIMIT = 2900
+# Headroom for the "(+N more...)" note, so adding it cannot push a section over.
+_OVERFLOW_ALLOWANCE = 40
 _BLOCK_LIMIT = 45
 
 
@@ -94,9 +96,11 @@ def _section(value: str, *, evidence: str = "") -> dict[str, Any]:
     else:
         budget = _SECTION_LIMIT - len(evidence) - 1
         if budget <= 0:
-            # The citations alone exceed the limit. Publishing them without the
-            # prose is recoverable; publishing prose without them is not.
-            text = _truncate(evidence, _SECTION_LIMIT)
+            # The citations alone fill the section. They are never truncated --
+            # _cites has already dropped whole entries to fit -- so the prose is
+            # what gives way. Publishing evidence without prose is recoverable;
+            # publishing prose without evidence is an unsupported claim.
+            text = evidence
         else:
             text = f"{_truncate(value, budget)}\n{evidence}"
     return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
@@ -106,8 +110,30 @@ def _claim_section(heading: str, claim: Claim) -> dict[str, Any]:
     return _section(f"{heading}\n{claim.statement}", evidence=_cites(claim.cites))
 
 
-def _cites(cites: Iterable[str]) -> str:
-    return "Evidence: " + ", ".join(f"`{cite}`" for cite in cites)
+def _cites(cites: Iterable[str], *, limit: int = _SECTION_LIMIT) -> str:
+    """Render citations within ``limit``, dropping whole ones and saying so.
+
+    A citation is an identifier: half of one is not weaker evidence, it is a
+    different identifier that resolves to nothing. So the rendered list drops
+    entries rather than being truncated, and reports the count it dropped --
+    a reader who sees "+3 more" knows to open the stored trace, while a reader
+    who sees a severed hash does not know anything is missing.
+    """
+    rendered: list[str] = []
+    dropped = 0
+    length = len("Evidence: ")
+    for cite in cites:
+        token = f"`{cite}`"
+        addition = len(token) + (2 if rendered else 0)
+        if length + addition > limit - _OVERFLOW_ALLOWANCE:
+            dropped += 1
+            continue
+        rendered.append(token)
+        length += addition
+    text = "Evidence: " + ", ".join(rendered)
+    if dropped:
+        text += f" (+{dropped} more in the stored trace)"
+    return text
 
 
 def _truncate(value: str, limit: int) -> str:
