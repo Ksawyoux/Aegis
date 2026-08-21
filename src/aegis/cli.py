@@ -30,11 +30,13 @@ from aegis.app.run_context import InMemorySink, RunContext
 from aegis.config import Settings
 from aegis.db.models import Service, UnresolvedEvent
 from aegis.db.session import create_database_engine
+from aegis.embeddings.providers import OpenAIEmbeddings
 from aegis.ingest.git import load_git_export, upsert_commits, upsert_deployments
 from aegis.ingest.k8s import ingest_kubernetes
 from aegis.ingest.logs import FORMATS, ParseContext, detect_format, iter_drafts
 from aegis.ingest.normalize import ServiceRegistry
 from aegis.ingest.pipeline import IngestReport, LogRecord, ingest_source
+from aegis.ingest.postmortems import ingest_postmortem
 from aegis.ingest.terraform import ingest_terraform
 
 app = typer.Typer(no_args_is_help=True)
@@ -144,9 +146,35 @@ def ingest_all() -> None:
                     )
                 typer.echo(f"k8s {name}: inserted={count}")
 
+        _ingest_postmortems(engine, settings)
         _render_unresolved_report(engine)
     finally:
         engine.dispose()
+
+
+def _ingest_postmortems(engine: Engine, settings: Settings) -> None:
+    """Embed and store the postmortem corpus, or say plainly why it was skipped.
+
+    This is the only ingest path that needs a remote provider, so it is also the
+    only one that can be unavailable on an otherwise working machine. It reports
+    the skip rather than passing silently: without it ``search_similar_postmortems``
+    returns nothing, and an empty result is indistinguishable from "no similar
+    incident exists" at the point where the agent reads it.
+    """
+    directory = settings.corpus_dir / "postmortems"
+    sources = sorted(directory.glob("*.md")) if directory.is_dir() else []
+    if not sources:
+        typer.echo("postmortems: none found")
+        return
+    if settings.openai_api_key is None:
+        typer.echo(f"postmortems: skipped {len(sources)} file(s) -- OPENAI_API_KEY is not set")
+        return
+
+    provider = OpenAIEmbeddings(settings)
+    for source in sources:
+        with Session(engine) as session, session.begin():
+            ingest_postmortem(session, path=source, provider=provider)
+    typer.echo(f"postmortems: ingested={len(sources)}")
 
 
 @app.command("serve-mcp")

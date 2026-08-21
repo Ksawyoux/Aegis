@@ -9,6 +9,143 @@ that shares service identifiers and one UTC clock across every evidence source. 
 that schema through exactly three deterministic, aggregate-only MCP tools:
 `get_incident_diff`, `get_error_telemetry`, and `search_similar_postmortems`.
 
+## How it works
+
+Aegis Context is built on one bet: **correlate at ingest, not at query time.**
+
+The reflexive agentic design for this problem is a swarm — a Git agent, a logs agent, a metrics
+agent, talking to one another. That reintroduces context loss at the coordination layer, and turns
+structured facts into prose that the next agent has to parse back into structure. Aegis Context
+instead normalises every source into one PostgreSQL schema that shares service identifiers and one
+UTC clock, then hands a single agent three deterministic tools over it.
+
+The consequence is that vector search is used for exactly one thing — finding prose that resembles
+other prose, in past postmortems. Live telemetry is never retrieved by similarity. It is fetched by
+SQL, because "how many 5xx did this service emit in this minute" has an exact answer and an
+approximate one is worse than useless.
+
+### High-level architecture
+
+```mermaid
+flowchart TB
+  subgraph SRC["Evidence sources — committed corpus"]
+    GIT["git export<br/>commits + deployments + hunks"]
+    TF["terraform<br/>plan-*.json ∩ applies.json"]
+    K8S["kubernetes<br/>pod-status.json + events.json"]
+    LOG["logs<br/>json · nginx · python · logfmt"]
+    PM["postmortems<br/>*.md"]
+  end
+
+  SRC --> ETL["ETL — aegis ingest all"]
+  ETL --> PG[("PostgreSQL + pgvector<br/>one schema · one clock · one service id")]
+
+  PG --> MCP["MCP server — stdio subprocess<br/>3 aggregate-only tools"]
+  MCP --> AG["single agent<br/>claude-opus-5"]
+  AG --> SUM["IncidentSummary<br/>every claim carries citations"]
+  SUM --> VAL{"provenance validation"}
+  VAL -- "citation not seen this run" --> ABORT["run aborts"]
+  VAL -- "all citations captured" --> OUT["CLI · Slack · stored trace"]
+
+  ALERT["alert webhook"] --> API["FastAPI<br/>atomic dedup"] --> AG
+```
+
+The agent never touches the database. It cannot issue SQL, and it cannot read individual rows
+except through an aggregate that already carries their citations. That is a deliberate constraint:
+an agent that can query freely will eventually retrieve something it cannot cite.
+
+### The ETL pipeline
+
+Every source converges on the same normalisation, in the same order, before anything is written.
+
+```mermaid
+flowchart LR
+  RAW["raw source record"] --> UID["source_uid<br/>content-derived, computed<br/>BEFORE normalisation"]
+  UID --> RES["resolve_service()<br/>name → log_keys → k8s_names<br/>→ repo → infra_tags"]
+  RES -- "no match" --> UNRES[("unresolved_events")]
+  RES --> LVL["canonical_level()<br/>nginx derives level from status"]
+  LVL --> MASK["template masking<br/>single pass, sentinel-based<br/>template_hash = sha256[:32]"]
+  MASK --> BASE[("log_events · commits · deployments<br/>infra_changes")]
+  BASE --> ROLL["delete + recompute<br/>affected minutes only<br/>one transaction, advisory lock"]
+  ROLL --> RU[("error_rollups")]
+```
+
+Four properties of that pipeline are load-bearing, and each exists because the obvious alternative
+is wrong:
+
+- **`source_uid` is computed before normalisation, and inserts are `ON CONFLICT DO NOTHING`.** This
+  is what makes a crashed batch replayable. Derive identity after normalisation and a change to
+  normalisation silently changes identity.
+- **Rollups are deleted and recomputed, never upserted.** `ON CONFLICT DO UPDATE SET count =
+  EXCLUDED.count` undercounts on any overlapping re-run, and the error is invisible: every number
+  the agent saw simply becomes wrong.
+- **Masking is a single pass with sentinels, not sequential substitution.** Run the substitutions in
+  sequence and a later branch rewrites an earlier branch's output — the quoted-string rule turns
+  `"<URL>"` into `<STR>`, and two identical messages get two hashes.
+- **A row that cannot be attributed to a service goes to `unresolved_events`, not to `NULL`.**
+  `log_events.service_id` is part of the rollup primary key, so a nullable one fails on the first
+  unattributable line rather than the thousandth.
+
+Terraform is the sharpest case. `terraform show -json` plan output describes *intended* actions and
+carries neither execution evidence nor a timestamp. Ingesting it as applied state would let the
+agent cite an abandoned plan as a root cause, so only entries with a matching `applies.json` record
+whose status is `success` are ingested at all, and `applied_at` comes from the manifest.
+
+### The MCP layer
+
+Three tools, all aggregate-only, all returning a citation on every row they surface.
+
+| Tool | Answers | Returns |
+| --- | --- | --- |
+| `get_incident_diff` | what changed near this window | `focus`, `other_services`, `unattributed` — commits with hunks, deployments, attributed infra changes |
+| `get_error_telemetry` | what the telemetry did | minute-snapped series by status class, top templates ranked by delta against the preceding disjoint window, one richest exemplar each, `baseline_sparse` |
+| `search_similar_postmortems` | has this happened before | cosine-nearest chunks above a similarity floor, resolution carrying its own citation |
+
+The server runs as a stdio subprocess with its database URL pinned explicitly, because
+`StdioServerParameters` does not inherit the parent environment — a server that silently reads a
+different database presents as an empty tool result, not as an error.
+
+### What "context" means here, and what it does not
+
+Every claim in an `IncidentSummary` is a `Claim` object: a statement plus at least one citation.
+Citations follow a fixed grammar owned by `src/aegis/mcp_server/citations.py` — `commit:<sha40>`,
+`deploy:<uid32>`, `infra:<uid32>`, `log:<uid32>`,
+`rollup:<service>/<iso8601>/<status_class>/<level>/<template_hash>`, and
+`postmortem:<slug>@<content_sha8>#<ordinal>`.
+
+Before a summary is returned, every citation in it is checked against the set of citations that the
+tools actually returned during that run. An identifier that is malformed, or well formed but never
+seen, aborts the investigation.
+
+**This proves provenance, not support.** It establishes that the agent is pointing at a row a tool
+handed it during this run, which is what makes fabricated evidence impossible. It does not
+establish that the row entails the sentence attached to it. Semantic support is checked by the
+planted scenario contracts, or by a human.
+
+### Repository layout
+
+| Path | Role |
+| --- | --- |
+| `src/aegis/config.py` | All runtime settings, `AEGIS_`-prefixed, `.env`-backed. The API key is a `SecretStr` so it cannot reach a stored trace. |
+| `src/aegis/db/` | The complete schema and its constraints, plus engine construction. Migration 1 creates every table, including ones only later versions read. |
+| `src/aegis/ingest/` | One module per source — `git`, `logs`, `terraform`, `k8s`, `postmortems` — over shared `identity`, `normalize`, `templates`, and `pipeline` primitives. |
+| `src/aegis/aggregate/` | Rollup computation: the delete-and-recompute transaction and its dirty-set capture. |
+| `src/aegis/embeddings/` | The `EmbeddingProvider` protocol, the OpenAI provider, and committed fixture vectors so retrieval logic is testable offline. |
+| `src/aegis/mcp_server/` | The three tools, their SQL, their response envelopes, and the citation grammar. |
+| `src/aegis/agent/` | The agent loop, its prompt, the `IncidentSummary` model, provenance validation, MCP transport, Slack delivery, and the stored-trace view. |
+| `src/aegis/app/` | The application boundary — `investigate()`, the run context and its trace sinks, the background runner, and rendering. The CLI and the API are both callers of it. |
+| `src/aegis/api/` | FastAPI: the alert webhook with atomic deduplication, the GitHub webhook, and `/healthz`. |
+| `src/aegis/release/` | The `make demo` coordinator: preflight, empty-database probe, replay digest, stage-labelled failures. |
+| `corpus/` | The committed evidence: `services.yaml`, `git/`, `logs/` with its `manifest.yaml`, `terraform/`, `k8s/`, `postmortems/`, and `scenarios/`. |
+| `tests/unit/` | Pure logic — masking, parsing, redaction, citation grammar. No database. |
+| `tests/integration/` | Real PostgreSQL: rollups, ingest replay, the MCP stdio boundary, webhook concurrency. |
+| `tests/corpus_contract/` | Runs **before** any agent: every expected fact must resolve to a concrete tool field, or the corpus is wrong rather than the agent. |
+| `tests/eval/` | The five scenario evaluations. Skipped without `ANTHROPIC_API_KEY`; hard failures under `AEGIS_REQUIRE_LIVE_EVAL=1`. |
+| `tests/docs/` | Guards the claim-scope language in this file and the design document against silent drift. |
+
+Full architecture, data model, and interface detail live in
+[`docs/2026-08-19-aegis-context-design.md`](docs/2026-08-19-aegis-context-design.md). The
+per-milestone implementation specifications are `docs/part-0` through `docs/part-4`.
+
 ## What v1.0 demonstrates
 
 Aegis Context v1.0 is a feasibility demonstration. Five planted scenarios show that one agent can
