@@ -1,55 +1,107 @@
-"""Live OpenAI embedding acceptance for the committed postmortem corpus (Part 4 §3.5).
+"""Live OpenAI embedding acceptance for the committed postmortem corpus.
 
-This is the one test in the suite that proves the embedding *provider* is
-reachable, rather than merely configured -- ``/healthz`` deliberately does not
-make a network call (Part 4 §0.2), so this is where a live rate limit,
-authentication failure, or dimension mismatch actually surfaces. Under
-``AEGIS_REQUIRE_LIVE_EVAL=1`` it must not fall back to fixture vectors or skip
-after an authentication failure; ``tests/eval/conftest.py`` turns any skip
-under ``tests/corpus_contract/`` into a failed session when that flag is set,
-so a silent skip here still fails ``make demo`` even though this module
-itself only ever calls ``pytest.skip``.
+This is the only test that proves the embedding provider is *reachable* rather
+than merely configured. ``/healthz`` deliberately makes no network call, so a
+live authentication failure, rate limit, or dimension mismatch surfaces here or
+nowhere.
 
-Part 2 owns the postmortem corpus and its embedding provider
-(``aegis.ingest.embeddings`` or equivalent), and it has not landed in this
-tree: there are no postmortem fixtures and no embedding call site to invoke.
-The import below is therefore lazy and the absence is reported as a skip with
-an explicit reason naming the missing dependency, not a stub implementation.
+It is also the only test that can catch an inverted ranking. pgvector's ``<=>``
+is cosine *distance* -- 0 is identical -- and a fixture suite passes perfectly
+with the comparison reversed, because fixture vectors are chosen to produce the
+expected answer either way. Retrieval against real embeddings cannot be fooled
+that way: a semantically related query must come back closer than an unrelated
+one, and it will not if the sign is wrong.
 """
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
+from sqlalchemy import Engine, select
+from sqlalchemy.orm import Session
+
+from aegis.config import Settings
+from aegis.db.models import PostmortemChunk
+from aegis.embeddings.providers import OpenAIEmbeddings
+from aegis.ingest.postmortems import ingest_postmortem
+from aegis.mcp_server.queries import search_similar_postmortems
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("OPENAI_API_KEY"),
     reason="OPENAI_API_KEY is not set; this test makes live, billed OpenAI calls",
 )
 
+_CORPUS = Path("corpus/postmortems")
 
-def test_committed_postmortems_embed_and_retrieve_above_the_similarity_floor() -> None:
-    """Embed the corpus live, then verify known error signatures retrieve it.
 
-    1. Embed every committed postmortem chunk with the real OpenAI API.
-    2. Every response index is accounted for, and every vector is finite,
-       non-zero, and exactly 1024 dimensions (the frozen ``vector(1024)``
-       column, per Part 2 revision 3's Matryoshka truncation).
-    3. Query each known error signature and verify its intended postmortem is
-       retrieved above the configured similarity floor.
-    """
-    import importlib.util  # noqa: PLC0415
+def _ingest_live(engine: Engine) -> OpenAIEmbeddings:
+    provider = OpenAIEmbeddings(Settings())
+    sources = sorted(_CORPUS.glob("*.md"))
+    assert sources, "the committed postmortem corpus is empty"
+    for source in sources:
+        with Session(engine) as session, session.begin():
+            ingest_postmortem(session, path=source, provider=provider)
+    return provider
 
-    if importlib.util.find_spec("aegis.ingest.embeddings") is None:
-        pytest.skip(
-            "aegis.ingest.embeddings (Part 2's postmortem embedding provider) is not "
-            "present in this tree; Part 2 has not landed here. This test cannot exercise "
-            "live OpenAI retrieval until it does."
+
+def test_committed_postmortems_embed_to_the_frozen_dimension(migrated_engine: Engine) -> None:
+    _ingest_live(migrated_engine)
+
+    with Session(migrated_engine) as session:
+        embeddings = session.scalars(select(PostmortemChunk.embedding)).all()
+
+    assert embeddings, "no chunks were stored"
+    for vector in embeddings:
+        # vector(1024) is frozen in migration 1, so a provider returning its
+        # native 1536 width fails at insert rather than degrading quietly.
+        assert len(vector) == 1024
+        assert all(value == value and abs(value) != float("inf") for value in vector)
+        assert any(value != 0.0 for value in vector)
+
+
+def test_a_related_signature_retrieves_its_postmortem_above_an_unrelated_one(
+    migrated_engine: Engine,
+) -> None:
+    """Ranking must be by cosine distance, and it must be the right way round."""
+    provider = _ingest_live(migrated_engine)
+
+    with Session(migrated_engine) as session:
+        hits = search_similar_postmortems(
+            session,
+            error_signature="container terminated by the out of memory killer, exit code 137",
+            provider=provider,
         )
-        return
 
-    pytest.skip(
-        "Part 2's postmortem corpus fixtures are not present in this tree; there is "
-        "nothing to embed yet even though the provider module was importable."
+    assert hits, "a clearly related signature retrieved nothing above the similarity floor"
+    assert hits[0].slug == "container-memory-limits", (
+        f"nearest postmortem was {hits[0].slug!r}; an inverted <=> comparison ranks the "
+        "least related document first and still returns a non-empty result"
+    )
+    slugs = [hit.slug for hit in hits]
+    if "cache-policy-regression" in slugs:
+        assert slugs.index("container-memory-limits") < slugs.index("cache-policy-regression")
+
+
+def test_an_unrelated_signature_does_not_retrieve_a_confident_match(
+    migrated_engine: Engine,
+) -> None:
+    """The similarity floor must actually exclude something.
+
+    Without this the floor could be zero and every query would return the whole
+    corpus, which reads as working retrieval right up until the agent cites an
+    unrelated incident.
+    """
+    provider = _ingest_live(migrated_engine)
+
+    with Session(migrated_engine) as session:
+        hits = search_similar_postmortems(
+            session,
+            error_signature="the quick brown fox jumps over the lazy dog",
+            provider=provider,
+        )
+
+    assert all(hit.similarity < 0.75 for hit in hits), (
+        f"unrelated text matched too strongly: {[(h.slug, h.similarity) for h in hits]}"
     )
