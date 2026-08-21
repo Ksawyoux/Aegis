@@ -38,6 +38,21 @@ class Settings(BaseSettings):
     embedding_dim: Literal[1024] = 1024
     rollup_bucket_seconds: Literal[60] = 60
 
+    @field_validator("openai_api_key", "slack_webhook_url", "github_webhook_secret", mode="before")
+    @classmethod
+    def _blank_secret_is_absent(cls, value: object) -> object:
+        """Treat an empty or whitespace-only credential as unset.
+
+        A committed ``.env`` template carries ``OPENAI_API_KEY=`` so an operator
+        knows where to paste the key. That parses as an empty string, not None,
+        so every ``is None`` guard passes and the empty value reaches the wire --
+        producing ``LocalProtocolError: Illegal header value b'Bearer '`` from
+        deep inside the HTTP client rather than "no API key configured".
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("embedding_dim", mode="before")
     @classmethod
     def _parse_embedding_dim(cls, value: object) -> object:

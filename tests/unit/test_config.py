@@ -101,3 +101,33 @@ def test_ollama_is_not_a_v1_dependency() -> None:
     resurrecting a field nothing reads.
     """
     assert "ollama_base_url" not in Settings.model_fields
+
+
+def test_a_blank_credential_is_treated_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`.env` templates ship the key name with an empty value.
+
+    An empty string is not None, so every ``is None`` guard passes and the blank
+    value reaches the wire, surfacing as `LocalProtocolError: Illegal header
+    value b'Bearer '` from inside the HTTP client instead of "no API key
+    configured".
+    """
+    _clear_openai_environment(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("AEGIS_SLACK_WEBHOOK_URL", "   ")
+    monkeypatch.setenv("AEGIS_GITHUB_WEBHOOK_SECRET", "")
+
+    settings = _settings_without_dotenv()
+
+    assert settings.openai_api_key is None
+    assert settings.slack_webhook_url is None
+    assert settings.github_webhook_secret is None
+
+
+def test_a_real_credential_survives_the_blank_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_openai_environment(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-real")
+
+    settings = _settings_without_dotenv()
+
+    assert settings.openai_api_key is not None
+    assert settings.openai_api_key.get_secret_value() == "sk-test-real"
