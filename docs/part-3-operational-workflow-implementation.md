@@ -61,10 +61,12 @@ Copied verbatim from the plan and the built code; every task inherits these.
   `text-embedding-3-small` at `dimensions=1024`.
 - Exactly three MCP tools, aggregates-only agent access.
 - All timestamps are `TIMESTAMPTZ` stored in UTC. Windows are half-open `[start, end)`.
-- Citation grammar is frozen: `commit:<sha7>`, `deploy:<id>`,
-  `infra:<apply_id>/<type>.<name>`,
-  `rollup:<service>/<iso8601>/<status_class>/<level>/<template_hash>`, `log:<id>`,
-  `postmortem:<slug>#<ordinal>`.
+- Citation grammar is frozen, and these are the **built** forms — the product plan's shorter
+  forms are stale and must not be used: `commit:<sha40>`, `deploy:<uid32>`, `infra:<uid32>`,
+  `log:<uid32>`, `rollup:<service>/<iso8601>/<status_class>/<level>/<template_hash>`, and
+  `postmortem:<slug>@<content_sha8>#<ordinal>`. `template_hash` is 32 hex characters, not 16.
+  Anything rendering or validating a citation — the Slack message, the stored `summary_md`, the
+  v1.0 trace view — reads `mcp_server/citations.py`, never a document.
 - Gates are `uv run ruff check .`, `uv run mypy --strict src`, and `uv run pytest -q`.
   `ruff format` is not configured and `mypy --strict src tests` has pre-existing failures;
   neither is a gate.
