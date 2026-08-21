@@ -21,6 +21,8 @@ dependencies = [
     "fastmcp",
     "anthropic[mcp]",
     "httpx",
+    "fastapi",
+    "uvicorn[standard]",
 ]
 
 [project.scripts]
