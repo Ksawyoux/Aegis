@@ -7,18 +7,24 @@ from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
 from anthropic import AsyncAnthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from aegis.agent.prompt import SYSTEM_PROMPT
 from aegis.agent.summary import IncidentSummary, validate_provenance
 from aegis.app.investigate import AgentTurnLimitExceeded
 from aegis.app.run_context import RunContext, TraceEvent
 from aegis.config import Settings
-from aegis.mcp_server.schemas import ErrorTelemetry, IncidentDiff
+from aegis.mcp_server.schemas import ErrorTelemetry, IncidentDiff, PostmortemHit
+
+
+class _PostmortemHits(RootModel[list[PostmortemHit]]):
+    pass
+
 
 ENVELOPE_BY_TOOL: dict[str, type[BaseModel]] = {
     "get_incident_diff": IncidentDiff,
     "get_error_telemetry": ErrorTelemetry,
+    "search_similar_postmortems": _PostmortemHits,
 }
 """The only success-shaped MCP responses which may become captured evidence."""
 

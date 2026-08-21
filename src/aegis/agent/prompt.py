@@ -21,6 +21,10 @@ confidence from the baseline comparison; confidence is capped at `medium`.
 
 When the evidence is insufficient, say so plainly and return confidence `low`
 rather than filling the gap with a plausible story.
+
+For Kubernetes Events, `occurrence_count` reports observed source occurrences
+only. It does not participate in anomaly ranking, so a high-count Event may
+appear below a chatty log template.
 """
 
 

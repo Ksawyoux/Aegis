@@ -1,0 +1,10 @@
+name: search-oom-crashloop
+alert:
+  service: search-api
+  alert_name: CrashLoop
+  dedup_key: pd-search-oom-0001
+  fired_at: 2026-08-20T07:10:00Z
+  window_start: 2026-08-20T06:40:00Z
+  window_end: 2026-08-20T07:15:00Z
+  payload: {summary: "search crash loop", severity: critical}
+expect: {service: search-api, root_cause_contains: [OOMKilled], must_cite: [], reachability: []}

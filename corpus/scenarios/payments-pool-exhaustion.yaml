@@ -1,0 +1,14 @@
+name: payments-pool-exhaustion
+alert:
+  service: payments-api
+  alert_name: PoolExhaustion
+  dedup_key: pd-payments-pool-0001
+  fired_at: 2026-08-20T00:10:00Z
+  window_start: 2026-08-19T23:40:00Z
+  window_end: 2026-08-20T00:15:00Z
+  payload: {summary: "payment pool errors", severity: critical}
+expect:
+  service: payments-api
+  root_cause_contains: [pool]
+  must_cite: []
+  reachability: []

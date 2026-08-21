@@ -22,9 +22,11 @@ from aegis.config import Settings
 from aegis.db.models import Service, UnresolvedEvent
 from aegis.db.session import create_database_engine
 from aegis.ingest.git import load_git_export, upsert_commits, upsert_deployments
-from aegis.ingest.logs import ParseContext, iter_drafts
+from aegis.ingest.k8s import ingest_kubernetes
+from aegis.ingest.logs import FORMATS, ParseContext, detect_format, iter_drafts
 from aegis.ingest.normalize import ServiceRegistry
 from aegis.ingest.pipeline import IngestReport, LogRecord, ingest_source
+from aegis.ingest.terraform import ingest_terraform
 
 app = typer.Typer(no_args_is_help=True)
 db_app = typer.Typer(no_args_is_help=True)
@@ -55,7 +57,7 @@ def ingest_services() -> None:
 
 @ingest_app.command("all")
 def ingest_all() -> None:
-    """Ingest services, Git evidence, and logs from the configured corpus."""
+    """Ingest every committed offline evidence source in the corpus."""
     settings = Settings()
     engine = create_database_engine(settings)
     try:
@@ -76,18 +78,29 @@ def ingest_all() -> None:
             )
 
         for log_path in sorted((settings.corpus_dir / "logs").glob("*")):
-            if not log_path.is_file():
+            if not log_path.is_file() or log_path.name == "manifest.yaml":
                 continue
             with Session(engine) as session, session.begin():
                 registry = _registry_from_session(session)
                 relative_path = log_path.relative_to(settings.corpus_dir).as_posix()
+                manifest = _log_manifest(settings.corpus_dir / "logs" / "manifest.yaml")
+                declaration = manifest.get(log_path.name, {})
+                format_hint = _optional_string(declaration.get("format"))
+                if format_hint is not None:
+                    detected = detect_format(log_path, FORMATS)
+                    if detected.name != format_hint:
+                        raise ValueError(
+                            f"log format mismatch for {log_path.name}: "
+                            f"declared {format_hint!r}, detected {detected.name!r}"
+                        )
                 records = tuple(
                     iter_drafts(
                         log_path,
                         ParseContext(
                             registry=registry,
                             source_file=relative_path,
-                            default_log_timezone="UTC",
+                            default_log_timezone=str(declaration.get("timezone", "UTC")),
+                            declared_service=_optional_string(declaration.get("service")),
                         ),
                     )
                 )
@@ -98,6 +111,29 @@ def ingest_all() -> None:
                     cursor=_draft_cursor(records),
                 )
             _render_ingest_report(relative_path, report)
+
+        terraform_dir = settings.corpus_dir / "terraform"
+        applies_path = terraform_dir / "applies.json"
+        if applies_path.exists():
+            for plan_path in sorted(terraform_dir.glob("plan-*.json")):
+                with Session(engine) as session, session.begin():
+                    count = ingest_terraform(
+                        session,
+                        plan_path=plan_path,
+                        applies_path=applies_path,
+                        registry=_registry_from_session(session),
+                    )
+                typer.echo(f"terraform {plan_path.name}: inserted={count}")
+
+        k8s_dir = settings.corpus_dir / "k8s"
+        for name in ("pod-status.json", "events.json"):
+            source = k8s_dir / name
+            if source.exists():
+                with Session(engine) as session, session.begin():
+                    count = ingest_kubernetes(
+                        session, path=source, registry=_registry_from_session(session)
+                    )
+                typer.echo(f"k8s {name}: inserted={count}")
 
         _render_unresolved_report(engine)
     finally:
@@ -204,6 +240,26 @@ def _registry_from_session(session: Session) -> ServiceRegistry:
 
 def _draft_cursor(records: Sequence[LogRecord]) -> int:
     return sum(len(record.raw.encode("utf-8")) for record in records)
+
+
+def _log_manifest(path: Path) -> dict[str, dict[str, object]]:
+    if not path.exists():
+        return {}
+    value = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("log manifest must be an object")
+    result: dict[str, dict[str, object]] = {}
+    for name, declaration in value.items():
+        if not isinstance(name, str) or not isinstance(declaration, dict):
+            raise ValueError("log manifest entries must map a file name to an object")
+        result[name] = declaration
+    return result
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None or isinstance(value, str):
+        return value
+    raise ValueError("manifest service must be a string")
 
 
 def _render_ingest_report(source: str, report: IngestReport) -> None:

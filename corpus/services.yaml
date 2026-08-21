@@ -3,3 +3,25 @@
   log_keys: [checkout-api, checkout]
   k8s_names: [checkout-api]
   log_timezone: UTC
+- name: payments-api
+  repo: acme/payments
+  log_keys: [payments-api]
+  k8s_names: [payments-api]
+  infra_tags: {service: payments-api}
+  log_timezone: UTC
+- name: search-api
+  repo: acme/search
+  log_keys: [search-api]
+  k8s_names: [search-api]
+  log_timezone: UTC
+- name: auth-api
+  repo: acme/auth
+  log_keys: [auth-api]
+  k8s_names: [auth-api]
+  log_timezone: UTC
+- name: cdn-api
+  repo: acme/cdn
+  log_keys: [cdn-api]
+  k8s_names: [cdn-api]
+  infra_tags: {service: cdn-api}
+  log_timezone: UTC

@@ -1,0 +1,10 @@
+name: cdn-cache-miss-storm
+alert:
+  service: cdn-api
+  alert_name: CacheMisses
+  dedup_key: pd-cdn-cache-0001
+  fired_at: 2026-08-20T21:10:00Z
+  window_start: 2026-08-20T20:40:00Z
+  window_end: 2026-08-20T21:15:00Z
+  payload: {summary: "cdn cache misses", severity: critical}
+expect: {service: cdn-api, root_cause_contains: [cache], must_cite: [], reachability: []}

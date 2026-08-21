@@ -35,6 +35,11 @@ def _server_environment(settings: Settings) -> dict[str, str]:
     """
     environment = dict(os.environ)
     environment["AEGIS_DATABASE_URL"] = settings.database_url
+    environment["AEGIS_OPENAI_BASE_URL"] = settings.openai_base_url
+    environment["AEGIS_EMBEDDING_MODEL"] = settings.embedding_model
+    environment["AEGIS_EMBEDDING_DIM"] = str(settings.embedding_dim)
+    if settings.openai_api_key is not None:
+        environment["OPENAI_API_KEY"] = settings.openai_api_key.get_secret_value()
     return environment
 
 

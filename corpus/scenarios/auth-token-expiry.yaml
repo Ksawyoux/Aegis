@@ -1,0 +1,10 @@
+name: auth-token-expiry
+alert:
+  service: auth-api
+  alert_name: TokenExpiry
+  dedup_key: pd-auth-token-0001
+  fired_at: 2026-08-20T14:10:00Z
+  window_start: 2026-08-20T13:40:00Z
+  window_end: 2026-08-20T14:15:00Z
+  payload: {summary: "authentication failures", severity: warning}
+expect: {service: auth-api, root_cause_contains: [token], must_cite: [], reachability: []}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,3 +38,8 @@ class Settings(BaseSettings):
     hunk_max_lines_per_file: int = 60
     embedding_dim: Literal[1024] = 1024
     rollup_bucket_seconds: Literal[60] = 60
+
+    @field_validator("embedding_dim", mode="before")
+    @classmethod
+    def _parse_embedding_dim(cls, value: object) -> object:
+        return int(value) if isinstance(value, str) and value.isdigit() else value

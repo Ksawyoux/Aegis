@@ -66,8 +66,9 @@ async def test_mcp_server_stdio_boundary(
             assert {tool.name for tool in tools.tools} == {
                 "get_error_telemetry",
                 "get_incident_diff",
+                "search_similar_postmortems",
             }
-            assert len(tools.tools) == 2
+            assert len(tools.tools) == 3
 
             response = await session.call_tool(
                 "get_error_telemetry", _valid_telemetry_arguments(seeded_service)

@@ -23,7 +23,7 @@ from aegis.db.models import Service
 @pytest.mark.asyncio
 async def test_transport_adapts_exactly_the_registered_tools() -> None:
     async with mcp_tools(Settings()) as tools:
-        assert len(tools) == 2
+        assert len(tools) == 3
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_investigate_supplies_tools_to_the_agent() -> None:
     finally:
         module.run_agent = original  # type: ignore[assignment]
 
-    assert len(captured["tools"]) == 2  # type: ignore[arg-type]
+    assert len(captured["tools"]) == 3  # type: ignore[arg-type]
 
 
 def test_server_environment_pins_the_configured_database_url() -> None:
@@ -79,7 +79,7 @@ async def test_spawned_server_reads_the_callers_database(migrated_engine: Engine
 
     settings = Settings(database_url=os.environ["AEGIS_DATABASE_URL"])
     async with mcp_tools(settings) as tools:
-        assert len(tools) == 2
+        assert len(tools) == 3
 
     with Session(migrated_engine) as session, session.begin():
         found = session.query(Service).filter_by(name=marker).one_or_none()
