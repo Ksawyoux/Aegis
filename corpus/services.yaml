@@ -25,3 +25,8 @@
   k8s_names: [cdn-api]
   infra_tags: {service: cdn-api}
   log_timezone: UTC
+- name: learn-ai
+  repo: ksawyoux/learn-ai-ksawyoux
+  log_keys: [learn-ai]
+  k8s_names: []
+  log_timezone: UTC
