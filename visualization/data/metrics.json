@@ -1,0 +1,81 @@
+{
+  "generated_at": "2026-08-22T02:31:00.654486+00:00",
+  "metrics": {
+    "counts": {
+      "services": 5,
+      "commits": 7,
+      "deployments": 7,
+      "log_events": 1176,
+      "unresolved_events": 1,
+      "error_rollups": 401,
+      "infra_changes": 2,
+      "postmortems": 5,
+      "postmortem_chunks": 20
+    },
+    "logs_per_service": {
+      "auth-api": 261,
+      "cdn-api": 261,
+      "checkout-api": 191,
+      "payments-api": 261,
+      "search-api": 202
+    },
+    "checkout_5xx_series": [
+      {
+        "t": "2026-08-19T14:03:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:04:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:05:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:06:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:07:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:08:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:09:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:10:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:11:00+00:00",
+        "count": 12
+      },
+      {
+        "t": "2026-08-19T14:12:00+00:00",
+        "count": 12
+      }
+    ],
+    "spike_minute_top": [
+      {
+        "template_hash": "5d3f4c3b2831614b904cffdba97cb2bb",
+        "level": "error",
+        "count": 12
+      },
+      {
+        "template_hash": "5d3f4c3b2831614b904cffdba97cb2bb",
+        "level": "info",
+        "count": 1
+      }
+    ],
+    "unresolved_example": {
+      "raw": "{\"level\":\"error\",\"msg\":\"payments client received status 504 for order 999999\",\"service\":\"inventory-api\",\"status\":504,\"ts\":\"2026-08-19T14:06:30Z\"}",
+      "reason": "no_service_match"
+    }
+  }
+}
