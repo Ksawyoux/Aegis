@@ -13,7 +13,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import sys
 from collections.abc import Generator, Iterator
 from datetime import UTC, datetime, timedelta
@@ -71,13 +70,11 @@ def registered_service(migrated_engine: Engine) -> Generator[tuple[str, str]]:
 
 
 @pytest.fixture
-def client(migrated_engine: Engine) -> Iterator[TestClient]:
+def client(migrated_engine: Engine, database_url: str) -> Iterator[TestClient]:
     # Built through the production factory on purpose: an earlier revision
     # mounted the router by hand here, so these tests passed while create_app
     # exposed no /webhooks/github route at all.
-    settings = Settings(
-        database_url=os.environ["AEGIS_DATABASE_URL"], github_webhook_secret=_SECRET
-    )
+    settings = Settings(database_url=database_url, github_webhook_secret=_SECRET)
     with TestClient(create_app(settings)) as client:
         yield client
 
@@ -110,10 +107,10 @@ def _sha(seed: str) -> str:
 
 
 class TestSecretAndSignature:
-    def test_missing_secret_returns_503_and_touches_nothing(self, migrated_engine: Engine) -> None:
-        settings = Settings(
-            database_url=os.environ["AEGIS_DATABASE_URL"], github_webhook_secret=None
-        )
+    def test_missing_secret_returns_503_and_touches_nothing(
+        self, migrated_engine: Engine, database_url: str
+    ) -> None:
+        settings = Settings(database_url=database_url, github_webhook_secret=None)
         with TestClient(create_app(settings)) as client:
             response = client.post(
                 "/webhooks/github", content=b'{"malformed', headers={"x-github-event": "push"}

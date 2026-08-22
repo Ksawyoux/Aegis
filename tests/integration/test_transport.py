@@ -9,7 +9,6 @@ and held a subprocess handle that was never assigned.
 
 from __future__ import annotations
 
-import os
 import sys
 from datetime import UTC, datetime, timedelta
 
@@ -75,7 +74,9 @@ def test_server_environment_pins_the_configured_database_url() -> None:
 
 
 @pytest.mark.asyncio
-async def test_spawned_server_reads_the_callers_database(migrated_engine: Engine) -> None:
+async def test_spawned_server_reads_the_callers_database(
+    migrated_engine: Engine, database_url: str
+) -> None:
     """The child must answer a question only the caller's database can answer.
 
     An earlier version listed the child's tools and then read the marker back
@@ -85,10 +86,15 @@ async def test_spawned_server_reads_the_callers_database(migrated_engine: Engine
     different database has never heard of this service.
     """
     marker = "transport-probe-service"
+    # Delete-first: a crashed run leaves the marker behind, and an insert-only
+    # probe would then fail its own setup on the unique name forever after.
     with Session(migrated_engine) as session, session.begin():
+        existing = session.query(Service).filter_by(name=marker).one_or_none()
+        if existing is not None:
+            session.delete(existing)
         session.add(Service(name=marker))
 
-    settings = Settings(database_url=os.environ["AEGIS_DATABASE_URL"])
+    settings = Settings(database_url=database_url)
     parameters = StdioServerParameters(
         command=sys.executable,
         args=["-m", "aegis.mcp_server"],

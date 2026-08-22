@@ -12,7 +12,6 @@ and a race is far easier to see when the scheduled work does nothing.
 
 from __future__ import annotations
 
-import os
 import threading
 import time
 from collections.abc import Iterator
@@ -32,8 +31,8 @@ DEDUP_KEY = "pd-concurrency-probe-0001"
 
 
 @pytest.fixture
-def client(migrated_engine: Engine) -> Iterator[TestClient]:
-    settings = Settings(database_url=os.environ["AEGIS_DATABASE_URL"])
+def client(migrated_engine: Engine, database_url: str) -> Iterator[TestClient]:
+    settings = Settings(database_url=database_url)
     with TestClient(create_app(settings)) as test_client:
         yield test_client
     with Session(migrated_engine) as session, session.begin():

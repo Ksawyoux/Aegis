@@ -45,6 +45,18 @@ def postgres_engine() -> Generator[Engine]:
     engine.dispose()
 
 
+@pytest.fixture(scope="session")
+def database_url(postgres_engine: Engine) -> str:
+    """The URL of the session database, resolved the same way ``postgres_engine`` is.
+
+    Tests that hand a URL to a spawned subprocess or an app factory must not
+    read ``os.environ`` directly: that variable is optional while
+    ``Settings()`` has .env-backed fallbacks, and a KeyError at setup reads as
+    15 opaque errors rather than one clear cause.
+    """
+    return str(postgres_engine.url)
+
+
 @pytest.fixture
 def migrated_engine(postgres_engine: Engine) -> Generator[Engine]:
     upgrade_head(postgres_engine)
