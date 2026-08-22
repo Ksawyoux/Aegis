@@ -424,6 +424,8 @@ function renderFeed(data){
 }
 async function pollLive(){
   try{
+    if(location.protocol==='file:')
+      throw new Error('opened as a file — live mode needs the API');
     const res=await fetch('/viz/live',{cache:'no-store'});
     if(!res.ok) throw new Error(res.status);
     const data=await res.json();
@@ -433,8 +435,11 @@ async function pollLive(){
     document.getElementById('lastpoll').textContent='last poll '+new Date().toLocaleTimeString()+' · '+data.generated_at;
     firstFeedLoad=false;
   }catch(err){
+    const fileMode=location.protocol==='file:';
     document.getElementById('livedot').className='dot off';
-    document.getElementById('livestate').textContent='offline — open via http://127.0.0.1:8000/viz';
+    document.getElementById('livestate').innerHTML=
+      fileMode?'offline — you opened the file directly; use <b>http://127.0.0.1:8000/viz</b>'
+              :'offline — is serve-api running?';
   }
 }
 pollLive();
