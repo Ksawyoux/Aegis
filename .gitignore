@@ -6,3 +6,6 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .claude/worktrees/
+
+# TypeScript dashboard
+node_modules/
