@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable, Mapping
+import json
+from collections.abc import Awaitable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from pydantic import BaseModel, RootModel
 
 from aegis.agent.prompt import SYSTEM_PROMPT
@@ -26,7 +27,7 @@ ENVELOPE_BY_TOOL: dict[str, type[BaseModel]] = {
     "get_error_telemetry": ErrorTelemetry,
     "search_similar_postmortems": _PostmortemHits,
 }
-"""The only success-shaped MCP responses which may become captured evidence."""
+"""The only success-shaped tool responses which may become captured evidence."""
 
 _TOOL_MAX_TOKENS = 4_096
 _SUMMARY_MAX_TOKENS = 2_048
@@ -35,30 +36,30 @@ _SUMMARY_REQUEST = "Return the structured incident summary now, with citations f
 
 @dataclass(frozen=True)
 class AgentResult:
-    """The validated summary and number of Messages API turns consumed before it."""
+    """The validated summary and number of API turns consumed before it."""
 
     summary: IncidentSummary
     turns_used: int
 
 
-class _Runner(Protocol):
-    def __aiter__(self) -> AsyncIterator[Any]: ...
+class _Tool(Protocol):
+    """What the loop needs from a transport-adapted tool."""
 
-    async def generate_tool_call_response(self) -> Mapping[str, Any] | None: ...
+    name: str
+
+    def as_openai_tool(self) -> dict[str, Any]: ...
+
+    def invoke(self, arguments: dict[str, Any]) -> Awaitable[tuple[str, bool]]: ...
 
 
-class _Messages(Protocol):
-    def tool_runner(self, **kwargs: Any) -> _Runner: ...
+class _Responses(Protocol):
+    async def create(self, **kwargs: Any) -> Any: ...
 
     async def parse(self, **kwargs: Any) -> Any: ...
 
 
-class _Beta(Protocol):
-    messages: _Messages
-
-
 class _Client(Protocol):
-    beta: _Beta
+    responses: _Responses
 
 
 async def run_agent(
@@ -71,120 +72,147 @@ async def run_agent(
 ) -> AgentResult:
     """Run tool turns, capture validated envelopes, then extract one summary.
 
-    ``client`` and ``tools`` are dependency-injection seams for the MCP package
-    that owns transport wiring and for deterministic tests. Production callers
-    may omit ``client``; transport tools must be supplied by that later package.
+    Each turn is one ``responses.create`` call. A turn whose output carries
+    function calls is executed against the adapted MCP tools and answered with
+    ``function_call_output`` items before the next request; a terminal turn --
+    one without function calls -- hands the accumulated history to structured
+    output for extraction.
+
+    Production callers may omit ``client``; transport tools must be supplied
+    by that later package.
     """
-    active_client = client if client is not None else cast(_Client, AsyncAnthropic())
+    active_client = client if client is not None else cast(_Client, _default_client(settings))
+    tool_list: list[_Tool] = list(tools)
+    lookup = {tool.name: tool for tool in tool_list}
     history: list[dict[str, Any]] = [{"role": "user", "content": brief}]
     budget = settings.agent_max_turns - 1
     turns_used = 0
-    runner = active_client.beta.messages.tool_runner(
-        model=settings.anthropic_model,
-        max_tokens=_TOOL_MAX_TOKENS,
-        messages=history,
-        tools=tools,
-        system=SYSTEM_PROMPT,
-        output_config={"effort": settings.agent_effort},
-    )
 
-    async for message in runner:
+    while True:
+        response = await active_client.responses.create(
+            model=settings.openai_model,
+            input=history,
+            tools=[tool.as_openai_tool() for tool in tool_list],
+            reasoning={"effort": settings.agent_effort},
+            max_output_tokens=_TOOL_MAX_TOKENS,
+            instructions=SYSTEM_PROMPT,
+        )
+        calls = [item for item in _output(response) if _field(item, "type") == "function_call"]
         turns_used += 1
         run_context.emit(
             TraceEvent(
                 kind="agent_turn",
-                payload={"turn": turns_used, "stop_reason": _field(message, "stop_reason")},
+                payload={
+                    "turn": turns_used,
+                    "function_calls": [_field(call, "name") for call in calls],
+                },
             )
         )
-        if _field(message, "stop_reason") != "tool_use":
+        if not calls:
             break
         if turns_used >= budget:
             raise AgentTurnLimitExceeded(turns_used)
 
-        response = await runner.generate_tool_call_response()
-        if response is None:
-            raise RuntimeError("tool runner yielded tool_use without a tool-result response")
-        _capture_tool_results(message, response, run_context)
-        history.append(_assistant_message(message))
-        history.append(dict(response))
+        history.extend(
+            {
+                "type": "function_call",
+                "call_id": _field(call, "call_id"),
+                "name": _field(call, "name"),
+                "arguments": _field(call, "arguments"),
+            }
+            for call in calls
+        )
+        history.extend(await _execute_calls(calls, lookup, run_context))
 
-    parsed = await active_client.beta.messages.parse(
-        model=settings.anthropic_model,
-        max_tokens=_SUMMARY_MAX_TOKENS,
-        messages=[*history, {"role": "user", "content": _SUMMARY_REQUEST}],
-        system=SYSTEM_PROMPT,
-        output_format=IncidentSummary,
-        output_config={"effort": settings.agent_effort},
+    parsed = await active_client.responses.parse(
+        model=settings.openai_model,
+        input=[*history, {"role": "user", "content": _SUMMARY_REQUEST}],
+        text_format=IncidentSummary,
+        reasoning={"effort": settings.agent_effort},
+        max_output_tokens=_SUMMARY_MAX_TOKENS,
+        instructions=SYSTEM_PROMPT,
     )
-    summary = cast(IncidentSummary, parsed.parsed_output)
+    summary = cast(IncidentSummary, parsed.output_parsed)
     validate_provenance(summary, run_context.captured_cites)
     return AgentResult(summary=summary, turns_used=turns_used)
 
 
-def _capture_tool_results(
-    message: Any, response: Mapping[str, Any], run_context: RunContext
-) -> None:
-    """Validate and capture successful results, joining blocks by ``tool_use_id``."""
-    results = {
-        _field(block, "tool_use_id"): block
-        for block in _content(response)
-        if _field(block, "type") == "tool_result"
-    }
-    for block in _content(message):
-        if _field(block, "type") != "tool_use":
-            continue
-        tool_use_id = _field(block, "id")
-        result = results.get(tool_use_id)
-        if result is None:
-            raise RuntimeError(f"missing tool result for tool use {tool_use_id!r}")
+def _default_client(settings: Settings) -> AsyncOpenAI:
+    """Build the production client from Settings, not the ambient environment.
 
-        name = _field(block, "name")
-        args = _field(block, "input")
-        if not isinstance(name, str) or not isinstance(args, dict):
-            raise RuntimeError("tool_use block has an invalid name or input")
-        if _field(result, "is_error", False):
+    ``AEGIS_OPENAI_BASE_URL`` is how this repository pins a provider endpoint
+    for embeddings; the agent must follow the same setting, or a rehearsal
+    against a local provider would silently call the real API.
+    """
+    return AsyncOpenAI(
+        base_url=settings.openai_base_url,
+        api_key=(
+            settings.openai_api_key.get_secret_value()
+            if settings.openai_api_key is not None
+            else None
+        ),
+    )
+
+
+async def _execute_calls(
+    calls: list[Any], lookup: dict[str, Any], run_context: RunContext
+) -> list[dict[str, str]]:
+    """Execute every function call in one turn and build its output items."""
+    outputs: list[dict[str, str]] = []
+    for call in calls:
+        name = _field(call, "name")
+        call_id = _field(call, "call_id")
+        args = _parse_arguments(call)
+        text, is_error = await _invoke(lookup.get(name), name, args)
+
+        if is_error:
             run_context.emit(
                 TraceEvent(
                     kind="error",
-                    payload={"tool": name, "args": args, "tool_use_id": tool_use_id},
+                    payload={"tool": name, "args": args, "call_id": call_id},
                 )
             )
-            continue
-
-        envelope_type = ENVELOPE_BY_TOOL[name]
-        envelope = envelope_type.model_validate_json(_result_text(result))
-        run_context.capture_tool_result(name, args, envelope)
-
-
-def _assistant_message(message: Any) -> dict[str, Any]:
-    """Copy the yielded assistant message into extraction history."""
-    return {"role": _field(message, "role"), "content": _content(message)}
+        else:
+            # Validate before capture so an off-spec success payload is stored
+            # as evidence only when it actually matches its declared envelope.
+            envelope_args = args if isinstance(args, dict) else {}
+            envelope = ENVELOPE_BY_TOOL[name].model_validate_json(text)
+            run_context.capture_tool_result(name, envelope_args, envelope)
+        outputs.append({"type": "function_call_output", "call_id": call_id, "output": text})
+    return outputs
 
 
-def _content(value: Any) -> list[Any]:
-    content = _field(value, "content")
-    if not isinstance(content, list):
-        raise RuntimeError("message content must be a list of blocks")
-    return content
+async def _invoke(tool: _Tool | None, name: str, args: object) -> tuple[str, bool]:
+    """Dispatch one call, degrading an unknown tool or bad arguments to an error result."""
+    if tool is None:
+        return json.dumps({"error": f"unknown tool {name!r}"}), True
+    if not isinstance(args, dict):
+        error = f"arguments must be an object, got {type(args).__name__}"
+        return json.dumps({"error": error}), True
+    return await tool.invoke(args)
+
+
+def _parse_arguments(call: Any) -> object:
+    raw = _field(call, "arguments")
+    if not isinstance(raw, str):
+        raise RuntimeError("function call arguments must be a JSON string")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"function call arguments are not valid JSON: {raw!r}") from error
+
+
+def _output(response: Any) -> list[Any]:
+    output = _field(response, "output")
+    if not isinstance(output, list):
+        raise RuntimeError("response output must be a list of items")
+    return output
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, Mapping):
         return value.get(name, default)
     return getattr(value, name, default)
-
-
-def _result_text(result: Any) -> str:
-    """Extract JSON text from Anthropic's string or text-block tool result form."""
-    content = _field(result, "content")
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        raise RuntimeError("tool result content must be text")
-    texts = [_field(block, "text") for block in content if _field(block, "type") == "text"]
-    if not texts or any(not isinstance(text, str) for text in texts):
-        raise RuntimeError("tool result did not contain text blocks")
-    return "".join(cast(list[str], texts))
 
 
 __all__ = ["AgentResult", "ENVELOPE_BY_TOOL", "run_agent"]

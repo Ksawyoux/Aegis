@@ -1,21 +1,17 @@
 """Shared five-scenario evaluation packaging (Part 4 §3).
 
-One paid Anthropic call per scenario, never more. ``evaluate_case`` is called
+One paid OpenAI model call per scenario, never more. ``evaluate_case`` is called
 exactly once per collected :class:`EvaluationCase`, and every semantic
 assertion in ``test_scenario.py`` reads the resulting single
 :class:`EvaluationResult` rather than re-invoking the model. There is no
 automatic retry and no "best of N" selection: a scenario that fails, fails.
 
 ``EXPECTED_SCENARIO_COUNT`` is fixed at five because that is the milestone's
-falsifiable claim (Part 4 spec §3.2, §10.5). As of this build only one
-scenario manifest (``corpus/scenarios/checkout-5xx-spike.yaml``) exists in
-this worktree, because Part 2 -- which owns the remaining four scenarios, the
-Terraform/Kubernetes corpus, and the postmortem embeddings pipeline -- has not
-landed here. ``load_evaluation_cases`` is written to generalize to however
-many manifests are actually present; the "exactly five" requirement is only
-enforced under strict demo mode (``AEGIS_REQUIRE_LIVE_EVAL=1``), where it
-correctly fails until Part 2 supplies the rest rather than silently accepting
-one scenario as if it were the whole claim.
+falsifiable claim (Part 4 spec §3.2, §10.5). ``load_evaluation_cases`` generalizes
+to however many manifests are actually present, so a missing or extra manifest
+only surfaces under strict demo mode (``AEGIS_REQUIRE_LIVE_EVAL=1``), where the
+count mismatch fails loudly rather than silently accepting fewer scenarios as if
+they were the whole claim.
 """
 
 from __future__ import annotations

@@ -19,10 +19,10 @@ dependencies = [
     "pyyaml",
     "python-dateutil",
     "fastmcp",
-    "anthropic[mcp]",
     "httpx",
     "fastapi",
     "uvicorn[standard]",
+    "openai>=3.3.1",
 ]
 
 [project.scripts]

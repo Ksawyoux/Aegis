@@ -42,52 +42,51 @@ class RecordingRunContext(RunContext):
 
 
 @dataclass
-class FakeRunner:
-    turns: list[tuple[dict[str, Any], dict[str, Any] | None]]
-    _response: dict[str, Any] | None = field(default=None, init=False)
-    generate_calls: int = field(default=0, init=False)
+class FakeTool:
+    """One adapted MCP tool double with canned invocation results."""
 
-    async def __aiter__(self):  # type: ignore[no-untyped-def]
-        for message, response in self.turns:
-            self._response = response
-            yield message
+    name: str
+    result_text: str = ""
+    is_error: bool = False
+    calls: list[dict[str, Any]] = field(default_factory=list)
 
-    async def generate_tool_call_response(self) -> dict[str, Any] | None:
-        self.generate_calls += 1
-        return self._response
+    def as_openai_tool(self) -> dict[str, Any]:
+        return {"type": "function", "name": self.name, "parameters": {"type": "object"}}
+
+    async def invoke(self, arguments: dict[str, Any]) -> tuple[str, bool]:
+        self.calls.append(arguments)
+        return self.result_text, self.is_error
 
 
 @dataclass
-class FakeMessages:
-    runner: FakeRunner
+class FakeResponses:
+    turns: list[dict[str, Any]]
     summary: IncidentSummary
     order: list[str]
-    runner_kwargs: dict[str, Any] | None = field(default=None, init=False)
+    create_kwargs: list[dict[str, Any]] = field(default_factory=list)
     parse_kwargs: dict[str, Any] | None = field(default=None, init=False)
 
-    def tool_runner(self, **kwargs: Any) -> FakeRunner:
-        self.runner_kwargs = kwargs
-        return self.runner
+    async def create(self, **kwargs: Any) -> dict[str, Any]:
+        self.create_kwargs.append(kwargs)
+        return self.turns.pop(0)
 
     async def parse(self, **kwargs: Any) -> SimpleNamespace:
         self.order.append("extract")
         self.parse_kwargs = kwargs
-        return SimpleNamespace(parsed_output=self.summary)
+        return SimpleNamespace(output_parsed=self.summary)
 
 
 @dataclass
 class FakeClient:
-    beta: SimpleNamespace
+    responses: FakeResponses
 
 
 def _client(
-    turns: list[tuple[dict[str, Any], dict[str, Any] | None]],
+    turns: list[dict[str, Any]],
     summary: IncidentSummary,
     order: list[str],
-) -> tuple[FakeClient, FakeMessages, FakeRunner]:
-    runner = FakeRunner(turns)
-    messages = FakeMessages(runner, summary, order)
-    return FakeClient(beta=SimpleNamespace(messages=messages)), messages, runner
+) -> FakeClient:
+    return FakeClient(responses=FakeResponses(turns, summary, order))
 
 
 def _window() -> ResolvedWindow:
@@ -140,48 +139,45 @@ def _summary(cite: str = ROLLUP_CITE) -> IncidentSummary:
     )
 
 
-def _tool_turn(*blocks: dict[str, Any]) -> dict[str, Any]:
-    return {"role": "assistant", "stop_reason": "tool_use", "content": list(blocks)}
-
-
-def _tool_use(tool_use_id: str, name: str) -> dict[str, Any]:
-    return {"type": "tool_use", "id": tool_use_id, "name": name, "input": {"service": name}}
-
-
-def _tool_result(tool_use_id: str, envelope: object) -> dict[str, Any]:
+def _call(call_id: str, name: str) -> dict[str, Any]:
     return {
-        "type": "tool_result",
-        "tool_use_id": tool_use_id,
-        "content": [
-            {"type": "text", "text": envelope.model_dump_json()}  # type: ignore[union-attr]
-        ],
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": '{"service": "' + name + '"}',
     }
+
+
+def _turn(*items: dict[str, Any]) -> dict[str, Any]:
+    return {"output": list(items)}
 
 
 def _terminal_turn() -> dict[str, Any]:
-    return {"role": "assistant", "stop_reason": "end_turn", "content": []}
+    return {"output": [{"type": "message", "role": "assistant", "content": []}]}
+
+
+def _default_tools() -> list[FakeTool]:
+    return [
+        FakeTool("get_incident_diff", result_text=_diff().model_dump_json()),
+        FakeTool("get_error_telemetry", result_text=_telemetry().model_dump_json()),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_parallel_results_are_matched_by_tool_use_id_and_captured_before_extraction() -> None:
+async def test_parallel_calls_are_matched_by_call_id_and_captured_before_extraction() -> None:
     order: list[str] = []
-    tool_turn = _tool_turn(
-        _tool_use("diff", "get_incident_diff"),
-        _tool_use("telemetry", "get_error_telemetry"),
-    )
-    response = {
-        "role": "user",
-        "content": [
-            _tool_result("telemetry", _telemetry()),
-            _tool_result("diff", _diff()),
+    tools = _default_tools()
+    client = _client(
+        [
+            _turn(_call("diff", "get_incident_diff"), _call("telemetry", "get_error_telemetry")),
+            _terminal_turn(),
         ],
-    }
-    client, messages, _ = _client(
-        [(tool_turn, response), (_terminal_turn(), None)], _summary(), order
+        _summary(),
+        order,
     )
     context = RecordingRunContext(order)
 
-    result = await run_agent("investigate", context, Settings(), client=client)
+    result = await run_agent("investigate", context, Settings(), client=client, tools=tools)
 
     assert result.turns_used == 2
     assert [capture[0] for capture in context.captures] == [
@@ -191,27 +187,17 @@ async def test_parallel_results_are_matched_by_tool_use_id_and_captured_before_e
     assert type(context.captures[0][2]) is IncidentDiff
     assert type(context.captures[1][2]) is ErrorTelemetry
     assert order == ["capture:get_incident_diff", "capture:get_error_telemetry", "extract"]
-    assert messages.parse_kwargs is not None
+    assert client.responses.parse_kwargs is not None
 
 
 @pytest.mark.asyncio
 async def test_error_result_is_traced_but_not_captured_or_cited() -> None:
     order: list[str] = []
-    response = {
-        "role": "user",
-        "content": [
-            {
-                "type": "tool_result",
-                "tool_use_id": "telemetry",
-                "content": "tool failed",
-                "is_error": True,
-            }
-        ],
-    }
-    client, _, _ = _client(
+    failing = FakeTool("get_error_telemetry", result_text="tool failed", is_error=True)
+    client = _client(
         [
-            (_tool_turn(_tool_use("telemetry", "get_error_telemetry")), response),
-            (_terminal_turn(), None),
+            _turn(_call("telemetry", "get_error_telemetry")),
+            _terminal_turn(),
         ],
         _summary(UNSEEN_CITE),
         order,
@@ -219,7 +205,7 @@ async def test_error_result_is_traced_but_not_captured_or_cited() -> None:
     context = RecordingRunContext(order)
 
     with pytest.raises(ProvenanceError, match="uncaptured citation"):
-        await run_agent("investigate", context, Settings(), client=client)
+        await run_agent("investigate", context, Settings(), client=client, tools=[failing])
 
     assert context.captures == []
     assert context.captured_cites == set()
@@ -227,11 +213,10 @@ async def test_error_result_is_traced_but_not_captured_or_cited() -> None:
 
 
 @pytest.mark.asyncio
-async def test_turn_cap_exhaustion_raises_before_extraction() -> None:
+async def test_turn_cap_exhaustion_raises_before_execution_and_extraction() -> None:
     order: list[str] = []
-    client, messages, runner = _client(
-        [(_tool_turn(_tool_use("telemetry", "get_error_telemetry")), None)], _summary(), order
-    )
+    tool = FakeTool("get_error_telemetry", result_text=_telemetry().model_dump_json())
+    client = _client([_turn(_call("telemetry", "get_error_telemetry"))], _summary(), order)
 
     with pytest.raises(AgentTurnLimitExceeded):
         await run_agent(
@@ -239,27 +224,60 @@ async def test_turn_cap_exhaustion_raises_before_extraction() -> None:
             RecordingRunContext(order),
             Settings(agent_max_turns=2),
             client=client,
+            tools=[tool],
         )
 
-    assert runner.generate_calls == 0
-    assert messages.parse_kwargs is None
+    assert tool.calls == []
+    assert len(client.responses.create_kwargs) == 1
+    assert client.responses.parse_kwargs is None
 
 
 @pytest.mark.asyncio
 async def test_summary_citation_not_seen_in_captured_result_raises() -> None:
     order: list[str] = []
-    response = {
-        "role": "user",
-        "content": [_tool_result("telemetry", _telemetry())],
-    }
-    client, _, _ = _client(
+    tools = _default_tools()
+    client = _client(
         [
-            (_tool_turn(_tool_use("telemetry", "get_error_telemetry")), response),
-            (_terminal_turn(), None),
+            _turn(_call("telemetry", "get_error_telemetry")),
+            _terminal_turn(),
         ],
         _summary(UNSEEN_CITE),
         order,
     )
 
     with pytest.raises(ProvenanceError, match="uncaptured citation"):
-        await run_agent("investigate", RecordingRunContext(order), Settings(), client=client)
+        await run_agent(
+            "investigate", RecordingRunContext(order), Settings(), client=client, tools=tools
+        )
+
+
+@pytest.mark.asyncio
+async def test_unknown_tool_degrades_to_an_error_result_the_model_can_recover_from() -> None:
+    order: list[str] = []
+    tools = _default_tools()
+    client = _client(
+        [
+            _turn(_call("mystery", "not_a_registered_tool")),
+            _terminal_turn(),
+        ],
+        _summary(UNSEEN_CITE),
+        order,
+    )
+    context = RecordingRunContext(order)
+
+    with pytest.raises(ProvenanceError, match="uncaptured citation"):
+        await run_agent("investigate", context, Settings(), client=client, tools=tools)
+
+    assert [event.kind for event in context._events] == ["agent_turn", "error", "agent_turn"]
+    outputs = [
+        item
+        for item in client.responses.create_kwargs[-1]["input"]
+        if item.get("type") == "function_call_output"
+    ]
+    assert outputs == [
+        {
+            "type": "function_call_output",
+            "call_id": "mystery",
+            "output": '{"error": "unknown tool \'not_a_registered_tool\'"}',
+        }
+    ]

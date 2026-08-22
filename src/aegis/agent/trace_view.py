@@ -195,13 +195,18 @@ def _render_event_line(event: Any) -> str:
     kind = _event_kind(event)
     payload = _event_payload(event)
     if kind == "agent_turn":
-        return f"agent_turn turn={payload.get('turn')} stop_reason={payload.get('stop_reason')}"
+        calls = payload.get("function_calls") or []
+        suffix = f" calls={','.join(calls)}" if calls else ""
+        return f"agent_turn turn={payload.get('turn')}{suffix}"
     if kind == "tool_result":
         tool = payload.get("tool")
         cites = len(_citation_strings_in(payload.get("result")))
         return f"tool_result {tool} cites={cites}"
     if kind == "error":
-        return f"error tool={payload.get('tool')} tool_use_id={payload.get('tool_use_id')}"
+        return (
+            f"error tool={payload.get('tool')} call_id="
+            f"{payload.get('call_id', payload.get('tool_use_id'))}"
+        )
     if kind == "terminal":
         status = payload.get("status")
         error_type = payload.get("error_type")

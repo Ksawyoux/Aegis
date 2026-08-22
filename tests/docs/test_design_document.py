@@ -67,11 +67,13 @@ def test_readme_names_exactly_three_mcp_tools() -> None:
         assert tool in readme, f"README does not name MCP tool {tool!r}"
 
 
-def test_readme_lists_both_database_paths_and_both_api_keys() -> None:
+def test_readme_lists_both_database_paths_and_the_api_key() -> None:
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "docker compose" in text.lower()
     assert "AEGIS_DEMO_DB_MODE=external" in text
-    assert "ANTHROPIC_API_KEY" in text
+    # The agent and the embedder share one provider, so one credential name
+    # covers every paid path; asserting its absence for any second provider is
+    # what would silently reintroduce a stale prerequisite.
     assert "OPENAI_API_KEY" in text
 
 

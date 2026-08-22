@@ -42,8 +42,8 @@ def _tool_result_event(tool: str, result: dict[str, Any]) -> dict[str, Any]:
     return {"kind": "tool_result", "payload": {"tool": tool, "args": {}, "result": result}}
 
 
-def _agent_turn_event(turn: int, stop_reason: str) -> dict[str, Any]:
-    return {"kind": "agent_turn", "payload": {"turn": turn, "stop_reason": stop_reason}}
+def _agent_turn_event(turn: int, function_calls: list[str]) -> dict[str, Any]:
+    return {"kind": "agent_turn", "payload": {"turn": turn, "function_calls": function_calls}}
 
 
 def _terminal_event(status: str, **extra: Any) -> dict[str, Any]:
@@ -70,9 +70,9 @@ class TestRenderTrace:
     def test_numbers_events_by_list_position_and_shows_incident_header(self) -> None:
         cite = "commit:" + "a" * 40
         trace = [
-            _agent_turn_event(1, "tool_use"),
+            _agent_turn_event(1, ["get_incident_diff"]),
             _tool_result_event("get_incident_diff", {"cite": cite}),
-            _agent_turn_event(2, "end_turn"),
+            _agent_turn_event(2, []),
             _terminal_event("completed"),
         ]
         run = StoredRun(
@@ -87,9 +87,9 @@ class TestRenderTrace:
         assert "Run abc123" in rendered
         assert "Incident 41 · demo-eval:checkout-5xx-spike · summarized" in rendered
         assert "Delivery: not attempted" in rendered
-        assert "000 agent_turn turn=1 stop_reason=tool_use" in rendered
+        assert "000 agent_turn turn=1 calls=get_incident_diff" in rendered
         assert "001 tool_result get_incident_diff cites=1" in rendered
-        assert "002 agent_turn turn=2 stop_reason=end_turn" in rendered
+        assert "002 agent_turn turn=2" in rendered
         assert "003 terminal status=completed" in rendered
         assert f"{cite}" in rendered
         assert "captured at event 001" in rendered

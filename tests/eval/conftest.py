@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from _pytest.reports import TestReport
     from _pytest.terminal import TerminalReporter
 
-_REQUIRED_CREDENTIAL_ENV_NAMES = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY")
+_REQUIRED_CREDENTIAL_ENV_NAMES = ("OPENAI_API_KEY",)
 _STRICT_PATH_PREFIXES = ("tests/eval/", "tests/corpus_contract/")
 
 _skip_reports: list[TestReport] = []

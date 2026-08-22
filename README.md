@@ -40,7 +40,7 @@ flowchart TB
   ETL --> PG[("PostgreSQL + pgvector<br/>one schema · one clock · one service id")]
 
   PG --> MCP["MCP server — stdio subprocess<br/>3 aggregate-only tools"]
-  MCP --> AG["single agent<br/>claude-opus-5"]
+  MCP --> AG["single agent<br/>gpt-5.6-luna"]
   AG --> SUM["IncidentSummary<br/>every claim carries citations"]
   SUM --> VAL{"provenance validation"}
   VAL -- "citation not seen this run" --> ABORT["run aborts"]
@@ -132,7 +132,7 @@ planted scenario contracts, or by a human.
 
 | Path | Role |
 | --- | --- |
-| `src/aegis/config.py` | Runtime settings, `AEGIS_`-prefixed and `.env`-backed, except `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`, which are read unprefixed because every other tool already exports them. `openai_api_key` is a `SecretStr` so it cannot reach a stored trace; the Slack and GitHub secrets are not, and should be. |
+| `src/aegis/config.py` | Runtime settings, `AEGIS_`-prefixed and `.env`-backed, except `OPENAI_API_KEY`, which is read unprefixed because every other tool already exports it. `openai_api_key` is a `SecretStr` so it cannot reach a stored trace; the Slack and GitHub secrets are not, and should be. |
 | `src/aegis/db/` | The complete schema and its constraints, plus engine construction. Migration 1 creates every table, including ones only later versions read. |
 | `src/aegis/ingest/` | One module per source — `git`, `logs`, `terraform`, `k8s`, `postmortems` — over shared `identity`, `normalize`, `templates`, and `pipeline` primitives. |
 | `src/aegis/aggregate/` | Rollup computation: the delete-and-recompute transaction and its dirty-set capture. |
@@ -146,7 +146,7 @@ planted scenario contracts, or by a human.
 | `tests/unit/` | Pure logic — masking, parsing, redaction, citation grammar. No database. |
 | `tests/integration/` | Real PostgreSQL: rollups, ingest replay, the MCP stdio boundary, webhook concurrency. |
 | `tests/corpus_contract/` | Runs **before** any agent: every expected fact must resolve to a concrete tool field, or the corpus is wrong rather than the agent. |
-| `tests/eval/` | The five scenario evaluations. Skipped without `ANTHROPIC_API_KEY`; hard failures under `AEGIS_REQUIRE_LIVE_EVAL=1`. |
+| `tests/eval/` | The five scenario evaluations. Skipped without `OPENAI_API_KEY`; hard failures under `AEGIS_REQUIRE_LIVE_EVAL=1`. |
 | `tests/docs/` | Guards the claim-scope language in this file and the design document against silent drift. |
 
 Full architecture, data model, and interface detail live in
@@ -192,14 +192,13 @@ Before running any command below, you need:
 - Git.
 - [`make`](https://www.gnu.org/software/make/).
 - [`uv`](https://docs.astral.sh/uv/).
-- Outbound HTTPS access to `api.anthropic.com` and `api.openai.com`.
-- A funded `ANTHROPIC_API_KEY`.
+- Outbound HTTPS access to `api.openai.com`.
 - A funded `OPENAI_API_KEY`.
 - Docker with Docker Compose for the authoritative release observation described below; or
   PostgreSQL 14+ with the `pgvector` extension for the local external-database rehearsal.
 - `cloudflared` or `ngrok`, but only if you intend to run `make demo-live`.
 
-`make demo` performs five paid Anthropic agent runs and live OpenAI embedding calls. Running the
+`make demo` performs five paid agent runs and live OpenAI embedding calls. Running the
 command is your explicit request to incur that cost; it does not pause for confirmation.
 
 ## Run the reproducible demo
@@ -209,7 +208,6 @@ named volume scoped to the demo, and a fresh clone with no prior Aegis state:
 
 ```bash
 git clone <this repository> && cd aegis-context
-export ANTHROPIC_API_KEY=...
 export OPENAI_API_KEY=...
 make demo
 ```
@@ -327,7 +325,7 @@ uv run pytest -q
 
 `ruff format` is not configured for this project and is not a gate. `mypy --strict src tests` has
 pre-existing failures in test files and is not a gate either. Ordinary `pytest` runs skip the five
-live agent evaluations and the live embedding test when `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
+live agent evaluations and the live embedding test when `OPENAI_API_KEY`
 is absent; `make demo` sets `AEGIS_REQUIRE_LIVE_EVAL=1`, which turns those skips into failures so a
 green `make demo` run cannot silently omit the observations the release claim depends on.
 

@@ -22,8 +22,8 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("OPENAI_API_KEY", "AEGIS_OPENAI_API_KEY"),
     )
     embedding_model: str = "text-embedding-3-small"
-    anthropic_model: str = "claude-opus-5"
-    agent_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    openai_model: str = "gpt-5.6-luna"
+    agent_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "high"
     # Aggregates-only tool access means one telemetry call per service to
     # establish cross-service correlation, so multi-service incidents need
     # more turns than a single-service one.

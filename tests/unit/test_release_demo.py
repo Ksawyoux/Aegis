@@ -65,7 +65,6 @@ class TestPreflightCredentials:
     ) -> None:
         _write_minimal_repo(tmp_path)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
         called = {"docker": False}
         monkeypatch.setattr(
             subprocess, "run", lambda *a, **k: called.__setitem__("docker", True) or _fake_ok()
@@ -78,14 +77,13 @@ class TestPreflightCredentials:
         assert "OPENAI_API_KEY" in str(excinfo.value)
         assert called["docker"] is False
 
-    def test_whitespace_only_anthropic_key_is_treated_as_missing(
+    def test_whitespace_only_openai_key_is_treated_as_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _write_minimal_repo(tmp_path)
-        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+        monkeypatch.setenv("OPENAI_API_KEY", "   ")
 
-        with pytest.raises(demo.DemoError, match="ANTHROPIC_API_KEY"):
+        with pytest.raises(demo.DemoError, match="OPENAI_API_KEY"):
             demo.preflight(_demo_options(tmp_path))
 
     def test_placeholder_key_value_is_rejected(
@@ -93,7 +91,6 @@ class TestPreflightCredentials:
     ) -> None:
         _write_minimal_repo(tmp_path)
         monkeypatch.setenv("OPENAI_API_KEY", "changeme")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
 
         with pytest.raises(demo.DemoError, match="OPENAI_API_KEY"):
             demo.preflight(_demo_options(tmp_path))
@@ -105,7 +102,6 @@ class TestPreflightScenarioManifests:
     ) -> None:
         _write_minimal_repo(tmp_path, scenario_count=1)
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
 
         with pytest.raises(demo.DemoError, match="scenario manifests"):
             demo.preflight(_demo_options(tmp_path))
@@ -118,7 +114,6 @@ class TestPreflightScenarioManifests:
             "name: scenario-1\nalert:\n  dedup_key: dedup-0\nexpect: {}\n", encoding="utf-8"
         )
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
 
         with pytest.raises(demo.DemoError, match="duplicate scenario dedup_key"):
             demo.preflight(_demo_options(tmp_path))
@@ -130,7 +125,6 @@ class TestPreflightDatabaseMode:
     ) -> None:
         _write_minimal_repo(tmp_path, scenario_count=5)
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
 
         with pytest.raises(demo.DemoError, match="AEGIS_DATABASE_URL"):
             demo.preflight(_demo_options(tmp_path, database_mode="external", database_url=""))
@@ -140,7 +134,6 @@ class TestPreflightDatabaseMode:
     ) -> None:
         _write_minimal_repo(tmp_path, scenario_count=5)
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-real")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-real")
         monkeypatch.setattr(subprocess, "run", lambda *a, **k: _fake_failure())
 
         with pytest.raises(demo.DemoError, match="AEGIS_DEMO_DB_MODE=external"):

@@ -5,7 +5,7 @@
     diagnoses every corpus incident without source-specific agents.
 
 This is the only suite that spends model tokens routinely, so it is opt-in: it
-skips unless ``ANTHROPIC_API_KEY`` is set -- except under
+skips unless ``OPENAI_API_KEY`` is set -- except under
 ``AEGIS_REQUIRE_LIVE_EVAL=1`` (``make demo``'s strict mode, enforced by
 ``tests/eval/conftest.py``), where a missing key fails collection instead.
 
@@ -42,8 +42,8 @@ from tests.eval.harness import (
 CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 
 requires_api_key = pytest.mark.skipif(
-    not os.environ.get("ANTHROPIC_API_KEY"),
-    reason="ANTHROPIC_API_KEY is not set; this suite spends model tokens",
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY is not set; this suite spends model tokens",
 )
 
 CASES = load_evaluation_cases()

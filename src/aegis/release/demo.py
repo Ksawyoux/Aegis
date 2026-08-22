@@ -138,15 +138,8 @@ def preflight(options: DemoOptions) -> None:
     if not openai_key or openai_key in _PLACEHOLDER_KEY_VALUES:
         raise DemoError(
             "prerequisites",
-            "OPENAI_API_KEY is unset. Live embedding calls cannot run and a skipped "
-            "evaluation does not satisfy make demo.",
-        )
-    anthropic_key = _stripped_env("ANTHROPIC_API_KEY")
-    if not anthropic_key or anthropic_key in _PLACEHOLDER_KEY_VALUES:
-        raise DemoError(
-            "prerequisites",
-            "ANTHROPIC_API_KEY is unset. The five agent evaluations cannot run and "
-            "skipped evaluations do not satisfy make demo.",
+            "OPENAI_API_KEY is unset. Live embedding and agent evaluation calls "
+            "cannot run, and a skipped evaluation does not satisfy make demo.",
         )
 
     if options.database_mode not in ("compose", "external"):
@@ -167,10 +160,10 @@ def preflight(options: DemoOptions) -> None:
     _require_unique_scenario_identity(scenarios)
 
     settings = Settings()
-    if settings.anthropic_model != "claude-opus-5":
+    if settings.openai_model != "gpt-5.6-luna":
         raise DemoError(
-            "prerequisites", f"AEGIS_ANTHROPIC_MODEL must be claude-opus-5, "
-            f"got {settings.anthropic_model!r}."
+            "prerequisites", f"AEGIS_OPENAI_MODEL must be gpt-5.6-luna, "
+            f"got {settings.openai_model!r}."
         )
     if settings.embedding_model != "text-embedding-3-small":
         raise DemoError(
@@ -271,7 +264,6 @@ def build_child_environment(options: DemoOptions, settings: Settings) -> dict[st
     environment["AEGIS_OPENAI_BASE_URL"] = settings.openai_base_url
     environment["AEGIS_EMBEDDING_MODEL"] = settings.embedding_model
     environment["OPENAI_API_KEY"] = _stripped_env("OPENAI_API_KEY")
-    environment["ANTHROPIC_API_KEY"] = _stripped_env("ANTHROPIC_API_KEY")
     environment["AEGIS_DEMO_MODE"] = "1"
     environment["AEGIS_REQUIRE_POSTGRES"] = "1"
     environment["AEGIS_REQUIRE_LIVE_EVAL"] = "1"
@@ -844,14 +836,17 @@ async def _verify_via_mcp(settings: Settings, service_name: str, commit: Mapping
     window_start = committed_at.isoformat()
     window_end = (committed_at + _one_minute()).isoformat()
     async with mcp_tools(settings) as tools:
-        by_name = {getattr(tool, "name", None): tool for tool in tools}
+        by_name = {tool.name: tool for tool in tools}
         diff_tool = by_name.get("get_incident_diff")
         if diff_tool is None:
             raise DemoError("live-demo", "get_incident_diff was not exposed by the spawned server")
-        result = await diff_tool(
-            service=service_name, window_start=window_start, window_end=window_end
+        rendered, is_error = await diff_tool.invoke(
+            {"service": service_name, "window_start": window_start, "window_end": window_end}
         )
-    rendered = json.dumps(result, default=str)
+    if is_error:
+        raise DemoError(
+            "live-demo", f"get_incident_diff failed on the spawned server: {rendered[:300]}"
+        )
     if f"commit:{commit['sha']}" not in rendered:
         raise DemoError(
             "live-demo",
