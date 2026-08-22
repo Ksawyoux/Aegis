@@ -282,3 +282,31 @@ class IngestWatermark(CreatedAtMixin, Base):
     source: Mapped[str] = mapped_column(Text, primary_key=True, nullable=False)
     last_cursor: Mapped[str] = mapped_column(Text, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class CodeReview(CreatedAtMixin, Base):
+    __tablename__ = "code_reviews"
+    __table_args__ = (
+        CheckConstraint(
+            "verdict IN ('clean', 'warn', 'fail')", name="ck_code_reviews_verdict"
+        ),
+        CheckConstraint(
+            "source IN ('push', 'pull_request')", name="ck_code_reviews_source"
+        ),
+        Index("ix_code_reviews_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)
+    sha: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    service_id: Mapped[int | None] = mapped_column(
+        ForeignKey("services.id", ondelete="SET NULL", onupdate="RESTRICT"), nullable=True
+    )
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    files_changed: Mapped[int] = mapped_column(Integer, nullable=False)
+    additions: Mapped[int] = mapped_column(Integer, nullable=False)
+    deletions: Mapped[int] = mapped_column(Integer, nullable=False)
+    findings: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )

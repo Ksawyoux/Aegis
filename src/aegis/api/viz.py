@@ -32,6 +32,66 @@ async def live(request: Request) -> dict[str, object]:
     return _snapshot(request.app.state.engine)
 
 
+_INCIDENT_QUERY = text(
+    """
+    SELECT i.id, i.dedup_key, i.status, i.root_cause,
+           COALESCE(s.name, '') AS service,
+           i.alert_payload ->> 'alert_name' AS alert_name,
+           i.summary_json -> 'summary' ->> 'confidence' AS confidence,
+           i.window_start, i.window_end, i.opened_at
+    FROM incidents i LEFT JOIN services s ON s.id = i.service_id
+    ORDER BY i.id DESC LIMIT 50
+    """
+)
+
+_REVIEW_QUERY = text(
+    """
+    SELECT r.sha, r.source, r.pr_number, r.verdict, r.files_changed,
+           r.additions, r.deletions, r.findings, r.created_at,
+           COALESCE(s.name, '') AS service
+    FROM code_reviews r LEFT JOIN services s ON s.id = r.service_id
+    ORDER BY r.created_at DESC LIMIT 20
+    """
+)
+
+
+@router.get("/viz/dashboard")
+async def dashboard_snapshot(request: Request) -> dict[str, object]:
+    """Return the aggregated snapshot the TypeScript dashboard polls."""
+    engine: Engine = request.app.state.engine
+    base = _snapshot(engine)
+    with engine.connect() as connection:
+        incidents = [dict(row) for row in connection.execute(_INCIDENT_QUERY).mappings()]
+        reviews = [dict(row) for row in connection.execute(_REVIEW_QUERY).mappings()]
+    return {
+        **base,
+        "incidents": [_jsonable(row) for row in incidents],
+        "reviews": [
+            {**_jsonable(row), "findings": len(row["findings"] or [])} for row in reviews
+        ],
+    }
+
+
+@router.get("/api/reviews")
+async def recent_reviews(request: Request) -> dict[str, object]:
+    """Recent review verdicts with full findings payloads."""
+    engine: Engine = request.app.state.engine
+    with engine.connect() as connection:
+        rows = [
+            dict(row)
+            for row in connection.execute(
+                text(
+                    """
+                    SELECT r.*, s.name AS service FROM code_reviews r
+                    LEFT JOIN services s ON s.id = r.service_id
+                    ORDER BY r.created_at DESC LIMIT 50
+                    """
+                )
+            ).mappings()
+        ]
+    return {"reviews": [_jsonable(row) for row in rows]}
+
+
 def _snapshot(engine: Engine) -> dict[str, object]:
     with engine.connect() as connection:
         counts = {
