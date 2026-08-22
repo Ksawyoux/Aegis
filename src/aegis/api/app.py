@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from aegis.api.github import router as github_router
 from aegis.api.health import router as health_router
@@ -13,6 +15,8 @@ from aegis.api.viz import router as viz_router
 from aegis.api.webhooks import router as webhook_router
 from aegis.config import Settings
 from aegis.db.session import create_database_engine
+
+_DASHBOARD_DIST = Path(__file__).parents[3] / "dashboard" / "dist"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -34,4 +38,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(viz_router)
     app.include_router(webhook_router)
     app.include_router(github_router)
+    if _DASHBOARD_DIST.is_dir():
+        # The TypeScript dashboard is optional build output: present after
+        # `npm run build` in dashboard/, absent in a bare checkout.
+        app.mount(
+            "/dashboard",
+            StaticFiles(directory=_DASHBOARD_DIST, html=True),
+            name="dashboard",
+        )
     return app

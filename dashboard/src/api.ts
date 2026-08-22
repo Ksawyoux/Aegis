@@ -1,0 +1,19 @@
+import type { DashboardSnapshot } from "./types";
+
+const EMPTY: DashboardSnapshot = {
+  generated_at: "",
+  counts: {},
+  incidents: [],
+  reviews: [],
+};
+
+export async function fetchSnapshot(signal?: AbortSignal): Promise<DashboardSnapshot> {
+  try {
+    const response = await fetch("/viz/dashboard", { cache: "no-store", signal });
+    if (!response.ok) throw new Error(String(response.status));
+    return (await response.json()) as DashboardSnapshot;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return EMPTY;
+  }
+}
