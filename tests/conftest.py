@@ -10,8 +10,6 @@ from alembic.config import Config
 from sqlalchemy import Connection, Engine, create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
-from aegis.config import Settings
-
 
 def alembic_config(connection: Connection | None = None) -> Config:
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
@@ -27,15 +25,24 @@ def upgrade_head(engine: Engine) -> None:
 
 @pytest.fixture(scope="session")
 def postgres_engine() -> Generator[Engine]:
-    engine = create_engine(Settings().database_url, pool_pre_ping=True)
+    # DB-backed tests must point at an explicitly opted-in database, never at
+    # Settings()' .env fallback: eval and reachability seeding TRUNCATEs every
+    # evidence table including services, so a silent fallback would wipe the
+    # development database on each full-suite run. Absence skips; strict demo
+    # mode (AEGIS_REQUIRE_POSTGRES=1) fails loudly instead.
+    url = os.environ.get("AEGIS_DATABASE_URL", "").strip()
+    if not url:
+        if os.environ.get("AEGIS_REQUIRE_POSTGRES") == "1":
+            raise RuntimeError(
+                "AEGIS_REQUIRE_POSTGRES=1 requires an explicit AEGIS_DATABASE_URL"
+            )
+        pytest.skip("AEGIS_DATABASE_URL not set; database-backed tests skipped")
+    engine = create_engine(url, pool_pre_ping=True)
     try:
         with engine.connect() as connection:
             connection.execute(text("SELECT 1"))
     except SQLAlchemyError:
         engine.dispose()
-        # AEGIS_REQUIRE_POSTGRES=1 is `make demo`'s strict mode (Part 4 §3.2):
-        # a database outage must fail the release gate loudly, not vanish as a
-        # skip that lets `pytest -q` exit zero while covering nothing real.
         if os.environ.get("AEGIS_REQUIRE_POSTGRES") == "1":
             raise
         pytest.skip("postgres unavailable")
@@ -47,13 +54,7 @@ def postgres_engine() -> Generator[Engine]:
 
 @pytest.fixture(scope="session")
 def database_url(postgres_engine: Engine) -> str:
-    """The URL of the session database, resolved the same way ``postgres_engine`` is.
-
-    Tests that hand a URL to a spawned subprocess or an app factory must not
-    read ``os.environ`` directly: that variable is optional while
-    ``Settings()`` has .env-backed fallbacks, and a KeyError at setup reads as
-    15 opaque errors rather than one clear cause.
-    """
+    """The URL of the session database, resolved the same way ``postgres_engine`` is."""
     return str(postgres_engine.url)
 
 
