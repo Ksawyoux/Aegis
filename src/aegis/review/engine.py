@@ -32,6 +32,7 @@ class ReviewFinding:
     line: int
     message: str
     evidence: str
+    remediation: str
 
 
 @dataclass(frozen=True)
@@ -54,44 +55,59 @@ class Rule:
     severity: Severity
     pattern: re.Pattern[str]
     message: str
+    remediation: str
     paths: tuple[str, ...] | None = None
 
 
 _RULES: tuple[Rule, ...] = (
     Rule("sec-aws-key", "high", re.compile(r"AKIA[0-9A-Z]{16}"),
-         "AWS access key id committed to the repository."),
+         "AWS access key id committed to the repository.",
+         "Revoke in IAM, purge history with git filter-repo, and load creds from env."),
     Rule("sec-private-key", "high",
          re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-         "A private key block was added to a source file."),
+         "A private key block was added to a source file.",
+         "Rotate the key pair, remove the file, rewrite history; serve keys from a vault."),
     Rule("sec-provider-token", "high",
          re.compile(r"\b(ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|xox[baprs]-[0-9A-Za-z-]{10,}|sk-[A-Za-z0-9T_-]{32,})\b"),
-         "A provider API token shape appears verbatim; treat as leaked and rotate."),
+         "A provider API token shape appears verbatim; treat as leaked and rotate.",
+         "Revoke at the provider; inject via environment or CI secret instead of source."),
     Rule("sec-hardcoded-secret", "medium",
          re.compile(r"(?i)\b(password|passwd|api_key|apikey|secret)\b\s*[=:]\s*[\"'][^\"']{8,}[\"']"),
-         "Hard-coded credential-shaped assignment; move to configuration or a secret store."),
+         "Hard-coded credential-shaped assignment; move to configuration or a secret store.",
+         "Replace the literal with Settings()/os.environ and document it in .env.example."),
     Rule("sec-sql-fstring", "high",
          re.compile(r"execute\(\s*f[\"']|\.raw\(\s*f[\"']|text\(f[\"']"),
-         "SQL composed from an f-string reaches execution unparameterized."),
+         "SQL composed from an f-string reaches execution unparameterized.",
+         "Use bound parameters: text('... WHERE id = :id'), {'id': value}."),
     Rule("sec-eval", "high", re.compile(r"(?<![\w.])eval\("),
-         "eval() on dynamic input executes attacker-controlled code paths."),
+         "eval() on dynamic input executes attacker-controlled code paths.",
+         "Use ast.literal_eval for data or json.loads for JSON; delete eval if possible."),
     Rule("sec-exec", "medium", re.compile(r"(?<![\w.])exec\("),
-         "exec() on dynamic input is indistinguishable from remote code execution."),
+         "exec() on dynamic input is indistinguishable from remote code execution.",
+         "Refactor to explicit functions or a dispatch table with allowlisted inputs."),
     Rule("sec-shell-true", "high", re.compile(r"shell\s*=\s*True"),
-         "subprocess with shell=True interpolates arguments through a shell."),
+         "subprocess with shell=True interpolates arguments through a shell.",
+         "Pass arguments as a list with shell=False, or shlex.join trusted fixed args."),
     Rule("sec-tls-disabled", "high", re.compile(r"verify\s*=\s*False"),
-         "TLS certificate verification disabled; enables interception."),
+         "TLS certificate verification disabled; enables interception.",
+         "Remove verify=False; trust a custom CA bundle rather than disabling checks."),
     Rule("sec-pickle", "medium", re.compile(r"pickle\.loads?\(|marshal\.loads\("),
-         "Deserializing pickle/marshal data executes embedded bytecode."),
+         "Deserializing pickle/marshal data executes embedded bytecode.",
+         "Exchange data as JSON; if pickle is required, only load signed internal blobs."),
     Rule("sec-cors-wildcard", "medium",
          re.compile(r"(?i)access-control-allow-origin[\"']?\s*[:,]\s*[\"']\*"),
-         "Wildcard CORS origin exposes authenticated responses to any site."),
+         "Wildcard CORS origin exposes authenticated responses to any site.",
+         "Echo an explicit origin allowlist; never pair wildcards with credentials."),
     Rule("test-skipped", "medium",
          re.compile(r"@pytest\.mark\.skip|\.skip\(\s*[\"']|\bit\.only\b|describe\.only\b"),
-         "A test was skipped or focused; coverage silently narrows."),
+         "A test was skipped or focused; coverage silently narrows.",
+         "Fix the flake, or file a tracked skip issue with an owner and expiry date."),
     Rule("debug-left-in", "low", re.compile(r"^\s*(console\.log\(|print\()"),
-         "Debug output left in changed lines."),
+         "Debug output left in changed lines.",
+         "Delete it or route through the structured logger at an appropriate level."),
     Rule("todo-introduced", "low", re.compile(r"\b(TODO|FIXME|HACK)\b"),
-         "A TODO/FIXME marker was introduced; track it or resolve it."),
+         "A TODO/FIXME marker was introduced; track it or resolve it.",
+         "Open a ticket and reference its id in the comment, or resolve before merge."),
 )
 
 
@@ -136,6 +152,7 @@ def analyze_unified_diff(diff_text: str) -> ReviewResult:
                             line=new_line,
                             message=rule.message,
                             evidence=content.strip()[:200],
+                            remediation=rule.remediation,
                         )
                     )
             new_line += 1
@@ -216,6 +233,7 @@ def findings_to_json(findings: Sequence[ReviewFinding]) -> list[dict[str, Any]]:
             "line": finding.line,
             "message": finding.message,
             "evidence": finding.evidence,
+            "remediation": finding.remediation,
         }
         for finding in findings
     ]

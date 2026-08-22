@@ -31,3 +31,27 @@ export interface DashboardSnapshot {
 }
 
 export type Verdict = "clean" | "warn" | "fail";
+
+export interface ReviewFinding {
+  rule_id: string;
+  severity: "high" | "medium" | "low";
+  path: string;
+  line: number;
+  message: string;
+  evidence: string;
+  remediation: string;
+}
+
+export interface ReviewDetail {
+  sha: string;
+  source: "push" | "pull_request";
+  pr_number: number | null;
+  verdict: Verdict;
+  service: string;
+  files_changed: number;
+  additions: number;
+  deletions: number;
+  findings: ReviewFinding[];
+  patch: string | null;
+  created_at: string;
+}

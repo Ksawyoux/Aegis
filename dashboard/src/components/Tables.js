@@ -9,7 +9,7 @@ export function IncidentsTable({ incidents }) {
                                     ? "Run aborted — no summary was written."
                                     : "Investigation pending.") }), _jsx("td", { children: _jsx(ConfidenceChip, { level: incident.confidence }) }), _jsx("td", { children: _jsx(StatusChip, { status: incident.status }) }), _jsxs("td", { className: "mono window", children: [incident.window_start.slice(11, 16), " \u2192 ", incident.window_end.slice(11, 16)] })] }, incident.id))) })] }));
 }
-export function ReviewsTable({ reviews }) {
+export function ReviewsTable({ reviews, onSelect, }) {
     if (reviews.length === 0) {
         return (_jsx("div", { className: "empty", children: "No reviews yet \u2014 push to a registered repo and the engine reviews it." }));
     }
@@ -17,6 +17,6 @@ export function ReviewsTable({ reviews }) {
                     const label = review.source === "pull_request" && review.pr_number !== null
                         ? `PR #${String(review.pr_number)} · ${review.sha.slice(0, 8)}`
                         : review.sha.slice(0, 10);
-                    return (_jsxs("tr", { className: `row-${review.verdict}`, children: [_jsx("td", { className: "mono", children: label }), _jsx("td", { children: review.service || "—" }), _jsxs("td", { className: "mono diffstat", children: [review.files_changed, "f", " ", _jsxs("span", { className: "add", children: ["+", review.additions] }), " ", _jsxs("span", { className: "del", children: ["\u2212", review.deletions] })] }), _jsx("td", { className: "mono", children: review.findings }), _jsx("td", { children: _jsx(VerdictChip, { verdict: review.verdict }) }), _jsx("td", { className: "mono", children: review.created_at.slice(0, 19) })] }, `${review.sha}-${review.source}`));
+                    return (_jsxs("tr", { className: `row-${review.verdict} clickable`, onClick: () => onSelect(review.sha), children: [_jsx("td", { className: "mono", children: label }), _jsx("td", { children: review.service || "—" }), _jsxs("td", { className: "mono diffstat", children: [review.files_changed, "f", " ", _jsxs("span", { className: "add", children: ["+", review.additions] }), " ", _jsxs("span", { className: "del", children: ["\u2212", review.deletions] })] }), _jsx("td", { className: "mono", children: review.findings }), _jsx("td", { children: _jsx(VerdictChip, { verdict: review.verdict }) }), _jsx("td", { className: "mono", children: review.created_at.slice(0, 19) })] }, `${review.sha}-${review.source}`));
                 }) })] }));
 }

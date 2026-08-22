@@ -72,6 +72,28 @@ async def dashboard_snapshot(request: Request) -> dict[str, object]:
     }
 
 
+@router.get("/api/reviews/{sha}")
+async def review_detail(sha: str, request: Request) -> dict[str, object]:
+    """One review's full findings and stored diff for the dashboard detail view."""
+    engine: Engine = request.app.state.engine
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(
+                """
+                SELECT r.*, s.name AS service FROM code_reviews r
+                LEFT JOIN services s ON s.id = r.service_id
+                WHERE r.sha = :sha
+                """
+            ),
+            {"sha": sha},
+        ).mappings().first()
+    if row is None:
+        return {"detail": None}
+    full = _jsonable(dict(row))
+    full["findings"] = row["findings"] or []
+    return {"detail": full}
+
+
 @router.get("/api/reviews")
 async def recent_reviews(request: Request) -> dict[str, object]:
     """Recent review verdicts with full findings payloads."""

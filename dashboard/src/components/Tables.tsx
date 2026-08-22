@@ -43,7 +43,13 @@ export function IncidentsTable({ incidents }: { incidents: Incident[] }) {
   );
 }
 
-export function ReviewsTable({ reviews }: { reviews: CodeReviewRow[] }) {
+export function ReviewsTable({
+  reviews,
+  onSelect,
+}: {
+  reviews: CodeReviewRow[];
+  onSelect: (sha: string) => void;
+}) {
   if (reviews.length === 0) {
     return (
       <div className="empty">
@@ -70,7 +76,11 @@ export function ReviewsTable({ reviews }: { reviews: CodeReviewRow[] }) {
               ? `PR #${String(review.pr_number)} · ${review.sha.slice(0, 8)}`
               : review.sha.slice(0, 10);
           return (
-            <tr key={`${review.sha}-${review.source}`} className={`row-${review.verdict}`}>
+            <tr
+              key={`${review.sha}-${review.source}`}
+              className={`row-${review.verdict} clickable`}
+              onClick={() => onSelect(review.sha)}
+            >
               <td className="mono">{label}</td>
               <td>{review.service || "—"}</td>
               <td className="mono diffstat">

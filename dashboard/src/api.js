@@ -17,3 +17,10 @@ export async function fetchSnapshot(signal) {
         return EMPTY;
     }
 }
+export async function fetchReviewDetail(sha) {
+    const response = await fetch(`/api/reviews/${sha}`, { cache: "no-store" });
+    if (!response.ok)
+        return null;
+    const body = (await response.json());
+    return body.detail;
+}

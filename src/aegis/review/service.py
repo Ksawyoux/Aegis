@@ -20,6 +20,8 @@ from aegis.review.engine import analyze_unified_diff, fetch_commit_patch, fetch_
 
 LOGGER = logging.getLogger(__name__)
 
+_MAX_PATCH_CHARS = 400_000
+
 
 def split_owner_repo(repo: str) -> tuple[str, str]:
     """Split ``owner/name`` (already normalized) into API path components."""
@@ -41,8 +43,14 @@ def _persist_review(
     additions: int,
     deletions: int,
     findings: list[dict[str, object]],
+    patch: str | None,
 ) -> None:
-    """Upsert one review keyed by sha: re-reviewing a sha replaces its verdict."""
+    """Upsert one review keyed by sha: re-reviewing a sha replaces its verdict.
+
+    The unified diff is stored with the verdict so the dashboard can show file
+    changes without re-fetching GitHub; oversized diffs are truncated and the
+    findings stay authoritative regardless.
+    """
     statement = (
         pg_insert(CodeReview)
         .values(
@@ -55,6 +63,7 @@ def _persist_review(
             additions=additions,
             deletions=deletions,
             findings=findings,
+            patch=None if patch is None else patch[:_MAX_PATCH_CHARS],
         )
         .on_conflict_do_update(
             index_elements=[CodeReview.sha],
@@ -64,6 +73,7 @@ def _persist_review(
                 "additions": additions,
                 "deletions": deletions,
                 "findings": findings,
+                "patch": None if patch is None else patch[:_MAX_PATCH_CHARS],
             },
         )
     )
@@ -80,7 +90,8 @@ def review_commit(engine: Engine, *, repo: str, sha: str, service_name: str | No
     """Review one landed commit and persist its findings. Never raises."""
     try:
         owner, name = split_owner_repo(repo)
-        result = analyze_unified_diff(fetch_commit_patch(owner, name, sha))
+        diff_text = fetch_commit_patch(owner, name, sha)
+        result = analyze_unified_diff(diff_text)
         findings = [
             {
                 "rule_id": f.rule_id,
@@ -89,6 +100,7 @@ def review_commit(engine: Engine, *, repo: str, sha: str, service_name: str | No
                 "line": f.line,
                 "message": f.message,
                 "evidence": f.evidence,
+                "remediation": f.remediation,
             }
             for f in result.findings
         ]
@@ -104,6 +116,7 @@ def review_commit(engine: Engine, *, repo: str, sha: str, service_name: str | No
                 additions=result.stats.additions,
                 deletions=result.stats.deletions,
                 findings=findings,
+                patch=diff_text,
             )
         LOGGER.info(
             "review push %s: verdict=%s findings=%d", sha[:10], result.verdict, len(findings)
@@ -118,7 +131,8 @@ def review_pull_request(
     """Review one PR's combined diff and persist under its head sha. Never raises."""
     try:
         owner, name = split_owner_repo(repo)
-        result = analyze_unified_diff(fetch_pr_patch(owner, name, pr_number))
+        diff_text = fetch_pr_patch(owner, name, pr_number)
+        result = analyze_unified_diff(diff_text)
         findings = [
             {
                 "rule_id": f.rule_id,
@@ -127,6 +141,7 @@ def review_pull_request(
                 "line": f.line,
                 "message": f.message,
                 "evidence": f.evidence,
+                "remediation": f.remediation,
             }
             for f in result.findings
         ]
@@ -142,6 +157,7 @@ def review_pull_request(
                 additions=result.stats.additions,
                 deletions=result.stats.deletions,
                 findings=findings,
+                patch=diff_text,
             )
         LOGGER.info(
             "review pr#%d %s: verdict=%s findings=%d",

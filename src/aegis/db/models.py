@@ -310,3 +310,4 @@ class CodeReview(CreatedAtMixin, Base):
     findings: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, server_default=text("'[]'::jsonb")
     )
+    patch: Mapped[str | None] = mapped_column(Text, nullable=True)

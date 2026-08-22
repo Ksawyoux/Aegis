@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { fetchSnapshot } from "./api";
 import { LiveBadge } from "./components/Chips";
+import { ReviewDetailPanel } from "./components/ReviewDetail";
 import { IncidentsTable, ReviewsTable } from "./components/Tables";
 import type { DashboardSnapshot } from "./types";
 
@@ -16,6 +17,7 @@ export default function App() {
   const [online, setOnline] = useState(false);
   const [view, setView] = useState<View>("incidents");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedSha, setSelectedSha] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -132,8 +134,13 @@ export default function App() {
             <IncidentsTable incidents={visibleIncidents} />
           </>
         )}
-        {view === "reviews" && <ReviewsTable reviews={snapshot.reviews} />}
+        {view === "reviews" && (
+          <ReviewsTable reviews={snapshot.reviews} onSelect={(sha) => setSelectedSha(sha)} />
+        )}
       </main>
+      {selectedSha !== null && (
+        <ReviewDetailPanel sha={selectedSha} onClose={() => setSelectedSha(null)} />
+      )}
     </div>
   );
 }

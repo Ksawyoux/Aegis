@@ -47,6 +47,7 @@ def test_secrets_and_eval_fail_the_review_with_line_evidence() -> None:
     assert aws.path == "config.py"
     assert aws.line == 10
     assert "AKIAIOSFODNN7EXAMPLE" in aws.evidence
+    assert "Revoke" in aws.remediation
 
 
 MIXED_DIFF = (
