@@ -1,26 +1,30 @@
-import type { DashboardSnapshot, ReviewDetail } from "./types";
+import type { DashboardSnapshot, Incident, IncidentDetail, IngestStats, ReviewDetail } from "./types";
 
-const EMPTY: DashboardSnapshot = {
-  generated_at: "",
-  counts: {},
-  incidents: [],
-  reviews: [],
+const jsonFetch = async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
+  const response = await fetch(url, { cache: "no-store", signal });
+  if (!response.ok) throw new Error(String(response.status));
+  return (await response.json()) as T;
 };
 
-export async function fetchSnapshot(signal?: AbortSignal): Promise<DashboardSnapshot> {
-  try {
-    const response = await fetch("/viz/dashboard", { cache: "no-store", signal });
-    if (!response.ok) throw new Error(String(response.status));
-    return (await response.json()) as DashboardSnapshot;
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    return EMPTY;
-  }
-}
+export const fetchIncidents = (signal?: AbortSignal): Promise<{ incidents: Incident[] }> =>
+  jsonFetch("/api/incidents", signal);
 
-export async function fetchReviewDetail(sha: string): Promise<ReviewDetail | null> {
-  const response = await fetch(`/api/reviews/${sha}`, { cache: "no-store" });
-  if (!response.ok) return null;
-  const body = (await response.json()) as { detail: ReviewDetail | null };
-  return body.detail;
-}
+export const fetchIncidentDetail = (
+  id: string,
+  signal?: AbortSignal,
+): Promise<{ incident: IncidentDetail | null }> => jsonFetch(`/api/incidents/${id}`, signal);
+
+export const fetchTelemetry = <T,>(service: string, signal?: AbortSignal): Promise<{ telemetry: T | null }> =>
+  jsonFetch(`/api/telemetry?service=${encodeURIComponent(service)}`, signal);
+
+export const fetchDiff = <T,>(service: string, signal?: AbortSignal): Promise<{ diff: T | null }> =>
+  jsonFetch(`/api/diff?service=${encodeURIComponent(service)}`, signal);
+
+export const fetchIngestStats = (signal?: AbortSignal): Promise<IngestStats> =>
+  jsonFetch("/api/ingest-stats", signal);
+
+export const fetchReviews = (signal?: AbortSignal): Promise<{ reviews: DashboardSnapshot["reviews"] }> =>
+  jsonFetch("/api/reviews", signal);
+
+export const fetchReviewDetail = (sha: string): Promise<{ detail: ReviewDetail | null }> =>
+  jsonFetch(`/api/reviews/${sha}`);
