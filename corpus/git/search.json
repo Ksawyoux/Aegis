@@ -1,0 +1,55 @@
+{
+  "commits": [
+    {
+      "author": "Noah Chen",
+      "authored_at": "2026-08-20T06:48:00Z",
+      "committed_at": "2026-08-20T06:49:00Z",
+      "files_changed": [
+        {
+          "additions": 2,
+          "deletions": 1,
+          "hunks": "@@ -4,3 +4,4 @@ labels:\n-  - shard\n+  - shard\n+  - query_kind\n",
+          "path": "config/metrics.yaml",
+          "status": "modified"
+        }
+      ],
+      "message": "add query latency labels",
+      "pr_number": 701,
+      "sha": "dddddddddddddddddddddddddddddddddddddddd"
+    },
+    {
+      "author": "Iris Okafor",
+      "authored_at": "2026-08-20T06:58:00Z",
+      "committed_at": "2026-08-20T06:59:00Z",
+      "files_changed": [
+        {
+          "additions": 1,
+          "deletions": 1,
+          "hunks": "@@ -31,5 +31,5 @@ resources:\n-    memory: 512Mi\n+    memory: 128Mi\n",
+          "path": "deploy/search-worker.yaml",
+          "status": "modified"
+        }
+      ],
+      "message": "tune worker resources",
+      "pr_number": 702,
+      "sha": "cccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "deploys": [
+    {
+      "commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+      "environment": "production",
+      "finished_at": "2026-08-20T06:52:00Z",
+      "started_at": "2026-08-20T06:51:00Z",
+      "status": "success"
+    },
+    {
+      "commit_sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "environment": "production",
+      "finished_at": "2026-08-20T07:02:00Z",
+      "started_at": "2026-08-20T07:01:30Z",
+      "status": "success"
+    }
+  ],
+  "repo": "acme/search"
+}

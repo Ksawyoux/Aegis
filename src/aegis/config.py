@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,15 +16,14 @@ class Settings(BaseSettings):
     )
 
     database_url: str = "postgresql+psycopg://aegis:aegis@localhost:5433/aegis"
-    ollama_base_url: str = "http://localhost:11434"
     openai_base_url: str = "https://api.openai.com/v1"
     openai_api_key: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices("OPENAI_API_KEY", "AEGIS_OPENAI_API_KEY"),
     )
     embedding_model: str = "text-embedding-3-small"
-    anthropic_model: str = "claude-opus-5"
-    agent_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    openai_model: str = "gpt-5.6-luna"
+    agent_effort: Literal["none", "low", "medium", "high", "xhigh", "max"] = "high"
     # Aggregates-only tool access means one telemetry call per service to
     # establish cross-service correlation, so multi-service incidents need
     # more turns than a single-service one.
@@ -38,3 +37,23 @@ class Settings(BaseSettings):
     hunk_max_lines_per_file: int = 60
     embedding_dim: Literal[1024] = 1024
     rollup_bucket_seconds: Literal[60] = 60
+
+    @field_validator("openai_api_key", "slack_webhook_url", "github_webhook_secret", mode="before")
+    @classmethod
+    def _blank_secret_is_absent(cls, value: object) -> object:
+        """Treat an empty or whitespace-only credential as unset.
+
+        A committed ``.env`` template carries ``OPENAI_API_KEY=`` so an operator
+        knows where to paste the key. That parses as an empty string, not None,
+        so every ``is None`` guard passes and the empty value reaches the wire --
+        producing ``LocalProtocolError: Illegal header value b'Bearer '`` from
+        deep inside the HTTP client rather than "no API key configured".
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("embedding_dim", mode="before")
+    @classmethod
+    def _parse_embedding_dim(cls, value: object) -> object:
+        return int(value) if isinstance(value, str) and value.isdigit() else value

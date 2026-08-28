@@ -78,6 +78,37 @@ def test_hunk_budget_precedence_keeps_whole_files_and_orders_paths() -> None:
     assert files[2]["hunks_omitted"] == "budget"
 
 
+def test_webhook_absence_outranks_budget_even_past_hunk_max_files() -> None:
+    """A push payload supplies changed paths but never patch content.
+
+    Every file from that payload must carry ``hunks_omitted: "webhook"``, never
+    ``"budget"`` -- including files ranked outside the top ``hunk_max_files`` by
+    size, where the old precedence mislabeled the omission reason because it
+    only checked ``hunks is None`` after the budget/position branch already won.
+    """
+    payload = _export_payload()
+    payload["commits"][0]["files_changed"] = [
+        {
+            "path": f"webhook-file-{index:02d}.py",
+            "status": "modified",
+            "additions": index,
+            "deletions": 0,
+            "hunks": None,
+        }
+        for index in range(20)
+    ]
+    commit = GitExport.model_validate(payload).commits[0]
+
+    files = files_changed_for_commit(
+        commit,
+        Settings(hunk_max_files=15, hunk_max_hunks_per_file=3, hunk_max_lines_per_file=20),
+    )
+
+    assert len(files) == 20
+    assert all(file["hunks"] is None for file in files)
+    assert all(file["hunks_omitted"] == "webhook" for file in files)
+
+
 def _export_payload() -> dict[str, object]:
     timestamp = datetime(2025, 1, 1, 12, 0, tzinfo=UTC).isoformat().replace("+00:00", "Z")
     sha = "a" * 40

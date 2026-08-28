@@ -254,11 +254,15 @@ def files_changed_for_commit(commit: GitCommit, settings: Settings) -> list[dict
     for file in commit.files_changed:
         hunks = file.hunks
         omitted: str | None = None
-        if file.path not in hunk_paths or _exceeds_hunk_budget(hunks, settings):
+        # A webhook-sourced file never carried patch content in the first place,
+        # so that absence must never be attributed to the hunk budget -- even
+        # when the file also falls outside the ranked top ``hunk_max_files``.
+        if file.hunks is None:
+            hunks = None
+            omitted = "webhook"
+        elif file.path not in hunk_paths or _exceeds_hunk_budget(hunks, settings):
             hunks = None
             omitted = "budget"
-        elif hunks is None:
-            omitted = "webhook"
         files.append(
             {
                 "path": file.path,

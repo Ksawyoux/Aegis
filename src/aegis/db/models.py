@@ -48,9 +48,7 @@ class Service(CreatedAtMixin, Base):
     infra_tags: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
-    log_timezone: Mapped[str] = mapped_column(
-        Text, nullable=False, server_default=text("'UTC'")
-    )
+    log_timezone: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("'UTC'"))
 
 
 class Commit(CreatedAtMixin, Base):
@@ -232,6 +230,7 @@ class Postmortem(CreatedAtMixin, Base):
     body_md: Mapped[str] = mapped_column(Text, nullable=False)
     resolution_md: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    model_fingerprint: Mapped[str] = mapped_column(Text, nullable=False, server_default=text("''"))
 
 
 class PostmortemChunk(CreatedAtMixin, Base):
@@ -240,9 +239,7 @@ class PostmortemChunk(CreatedAtMixin, Base):
         UniqueConstraint(
             "postmortem_id", "ordinal", name="uq_postmortem_chunks_postmortem_ordinal"
         ),
-        CheckConstraint(
-            "kind IN ('section', 'resolution')", name="ck_postmortem_chunks_kind"
-        ),
+        CheckConstraint("kind IN ('section', 'resolution')", name="ck_postmortem_chunks_kind"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, nullable=False)

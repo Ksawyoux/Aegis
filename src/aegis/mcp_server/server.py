@@ -13,8 +13,14 @@ from sqlalchemy.orm import Session
 
 from aegis.config import Settings
 from aegis.db.session import get_session
-from aegis.mcp_server.queries import QueryError, get_error_telemetry, get_incident_diff
-from aegis.mcp_server.schemas import ErrorTelemetry, IncidentDiff
+from aegis.embeddings import OpenAIEmbeddings
+from aegis.mcp_server.queries import (
+    QueryError,
+    get_error_telemetry,
+    get_incident_diff,
+    search_similar_postmortems,
+)
+from aegis.mcp_server.schemas import ErrorTelemetry, IncidentDiff, PostmortemHit
 
 _INVALID_REQUEST_MESSAGE = "Invalid query request."
 _INVALID_TIMESTAMP_MESSAGE = "Timestamps must be RFC-3339 strings with an explicit timezone."
@@ -45,7 +51,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         """
         start = _parse_timestamp(window_start)
         end = _parse_timestamp(window_end)
-        with _session() as session:
+        with _session(active_settings) as session:
             try:
                 return get_incident_diff(
                     session,
@@ -75,7 +81,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
         """
         start = _parse_timestamp(window_start)
         end = _parse_timestamp(window_end)
-        with _session() as session:
+        with _session(active_settings) as session:
             try:
                 return get_error_telemetry(
                     session,
@@ -88,13 +94,31 @@ def create_server(settings: Settings | None = None) -> FastMCP:
             except (QueryError, ValueError) as error:
                 raise ToolError(_INVALID_REQUEST_MESSAGE) from error
 
+    @mcp.tool(name="search_similar_postmortems")
+    def search_similar_postmortems_tool(
+        error_signature: str, k: int = 5, service: str | None = None
+    ) -> list[PostmortemHit]:
+        """Search nearest postmortems; occurrence_count does not affect ranking."""
+        try:
+            provider = OpenAIEmbeddings(active_settings)
+            with _session(active_settings) as session:
+                return search_similar_postmortems(
+                    session,
+                    error_signature=error_signature,
+                    k=k,
+                    service=service,
+                    provider=provider,
+                )
+        except (QueryError, ValueError) as error:
+            raise ToolError(_INVALID_REQUEST_MESSAGE) from error
+
     return mcp
 
 
 @contextmanager
-def _session() -> Generator[Session, None, None]:
+def _session(settings: Settings | None = None) -> Generator[Session, None, None]:
     """Open one database session for one tool call and always close it."""
-    session_generator = get_session()
+    session_generator = get_session(settings=settings)
     session = next(session_generator)
     try:
         yield session

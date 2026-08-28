@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Generator
 from pathlib import Path
 
@@ -32,11 +33,28 @@ def postgres_engine() -> Generator[Engine]:
             connection.execute(text("SELECT 1"))
     except SQLAlchemyError:
         engine.dispose()
+        # AEGIS_REQUIRE_POSTGRES=1 is `make demo`'s strict mode (Part 4 §3.2):
+        # a database outage must fail the release gate loudly, not vanish as a
+        # skip that lets `pytest -q` exit zero while covering nothing real.
+        if os.environ.get("AEGIS_REQUIRE_POSTGRES") == "1":
+            raise
         pytest.skip("postgres unavailable")
 
     upgrade_head(engine)
     yield engine
     engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def database_url(postgres_engine: Engine) -> str:
+    """The URL of the session database, resolved the same way ``postgres_engine`` is.
+
+    Tests that hand a URL to a spawned subprocess or an app factory must not
+    read ``os.environ`` directly: that variable is optional while
+    ``Settings()`` has .env-backed fallbacks, and a KeyError at setup reads as
+    15 opaque errors rather than one clear cause.
+    """
+    return str(postgres_engine.url)
 
 
 @pytest.fixture

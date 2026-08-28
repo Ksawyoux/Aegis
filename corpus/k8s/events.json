@@ -1,0 +1,15 @@
+[
+  {
+    "count": 7,
+    "involvedObject": {
+      "name": "search-api"
+    },
+    "lastTimestamp": "2026-08-20T07:06:00Z",
+    "message": "back-off restarting failed container indexer",
+    "metadata": {
+      "uid": "search-backoff-event-7f9d"
+    },
+    "reason": "BackOff",
+    "type": "Warning"
+  }
+]

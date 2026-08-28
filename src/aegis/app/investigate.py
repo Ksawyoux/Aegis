@@ -39,7 +39,11 @@ class AgentTurnLimitExceeded(RuntimeError):
     """Reserved failure raised when the future agent runtime exhausts its turn budget."""
 
 
-def investigate(request: InvestigationRequest, run_context: RunContext) -> IncidentSummary:
+def investigate(
+    request: InvestigationRequest,
+    run_context: RunContext,
+    settings: Settings | None = None,
+) -> IncidentSummary:
     """Run an investigation synchronously once the MCP server runtime is available.
 
     The MCP subprocess must always be terminated and a terminal trace event
@@ -48,7 +52,8 @@ def investigate(request: InvestigationRequest, run_context: RunContext) -> Incid
     """
     failure: BaseException | None = None
     try:
-        result = asyncio.run(_run_with_transport(request.brief(), run_context, Settings()))
+        active_settings = settings or Settings()
+        result = asyncio.run(_run_with_transport(request.brief(), run_context, active_settings))
         return result.summary
     except BaseException as exc:
         failure = _unwrap_solo_group(exc)

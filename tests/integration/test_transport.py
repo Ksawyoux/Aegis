@@ -9,13 +9,16 @@ and held a subprocess handle that was never assigned.
 
 from __future__ import annotations
 
-import os
+import sys
+from datetime import UTC, datetime, timedelta
 
 import pytest
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session
 
-from aegis.agent.transport import mcp_tools
+from aegis.agent.transport import PROJECT_ROOT, _server_environment, mcp_tools
 from aegis.config import Settings
 from aegis.db.models import Service
 
@@ -23,7 +26,7 @@ from aegis.db.models import Service
 @pytest.mark.asyncio
 async def test_transport_adapts_exactly_the_registered_tools() -> None:
     async with mcp_tools(Settings()) as tools:
-        assert len(tools) == 2
+        assert len(tools) == 3
 
 
 @pytest.mark.asyncio
@@ -52,7 +55,7 @@ async def test_investigate_supplies_tools_to_the_agent() -> None:
     finally:
         module.run_agent = original  # type: ignore[assignment]
 
-    assert len(captured["tools"]) == 2  # type: ignore[arg-type]
+    assert len(captured["tools"]) == 3  # type: ignore[arg-type]
 
 
 def test_server_environment_pins_the_configured_database_url() -> None:
@@ -71,20 +74,57 @@ def test_server_environment_pins_the_configured_database_url() -> None:
 
 
 @pytest.mark.asyncio
-async def test_spawned_server_reads_the_callers_database(migrated_engine: Engine) -> None:
-    """End to end: a row written here is visible through the spawned subprocess."""
+async def test_spawned_server_reads_the_callers_database(
+    migrated_engine: Engine, database_url: str
+) -> None:
+    """The child must answer a question only the caller's database can answer.
+
+    An earlier version listed the child's tools and then read the marker back
+    through the *parent* engine, which proves nothing: a child pointed at any
+    database, or at none, still advertises three tools and the parent still sees
+    its own row. The tool call below is the discriminator -- a server on a
+    different database has never heard of this service.
+    """
     marker = "transport-probe-service"
+    # Delete-first: a crashed run leaves the marker behind, and an insert-only
+    # probe would then fail its own setup on the unique name forever after.
     with Session(migrated_engine) as session, session.begin():
+        existing = session.query(Service).filter_by(name=marker).one_or_none()
+        if existing is not None:
+            session.delete(existing)
         session.add(Service(name=marker))
 
-    settings = Settings(database_url=os.environ["AEGIS_DATABASE_URL"])
-    async with mcp_tools(settings) as tools:
-        assert len(tools) == 2
-
-    with Session(migrated_engine) as session, session.begin():
-        found = session.query(Service).filter_by(name=marker).one_or_none()
-        assert found is not None
-        session.delete(found)
+    settings = Settings(database_url=database_url)
+    parameters = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "aegis.mcp_server"],
+        cwd=PROJECT_ROOT,
+        env=_server_environment(settings),
+    )
+    window = datetime(2026, 8, 20, tzinfo=UTC)
+    try:
+        async with stdio_client(parameters) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session_rpc:
+                await session_rpc.initialize()
+                response = await session_rpc.call_tool(
+                    "get_error_telemetry",
+                    {
+                        "service": marker,
+                        "window_start": window.isoformat().replace("+00:00", "Z"),
+                        "window_end": (window + timedelta(minutes=1))
+                        .isoformat()
+                        .replace("+00:00", "Z"),
+                    },
+                )
+        assert response.isError is False, (
+            "the spawned server could not resolve a service that exists in the caller's "
+            "database, so it is reading a different one"
+        )
+    finally:
+        with Session(migrated_engine) as session, session.begin():
+            found = session.query(Service).filter_by(name=marker).one_or_none()
+            if found is not None:
+                session.delete(found)
 
 
 def test_declared_exceptions_survive_nested_task_groups() -> None:

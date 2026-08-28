@@ -1,0 +1,23 @@
+[
+  {
+    "metadata": {
+      "name": "search-api",
+      "uid": "search-indexer-pod-7f9d"
+    },
+    "status": {
+      "containerStatuses": [
+        {
+          "lastState": {
+            "terminated": {
+              "exitCode": 137,
+              "finishedAt": "2026-08-20T07:05:00Z",
+              "reason": "OOMKilled"
+            }
+          },
+          "name": "indexer",
+          "restartCount": 7
+        }
+      ]
+    }
+  }
+]

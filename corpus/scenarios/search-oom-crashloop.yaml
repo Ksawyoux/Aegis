@@ -1,0 +1,32 @@
+name: search-oom-crashloop
+alert:
+  service: search-api
+  alert_name: CrashLoop
+  dedup_key: pd-search-oom-0001
+  fired_at: "2026-08-20T07:10:00Z"
+  window_start: "2026-08-20T06:40:00Z"
+  window_end: "2026-08-20T07:15:00Z"
+  payload: {summary: "search crash loop", severity: critical}
+expect:
+  service: search-api
+  root_cause_contains: [memory, OOMKilled]
+  must_cite:
+    - "deploy:ab5d6dbd73f4c65cd942359be7603b9c"
+    - "rollup:search-api/2026-08-20T07:05:00Z/none/error/5f59483a953816866882d521e3b28390"
+  ruled_out_contains: [dddddddddddddddddddddddddddddddddddddddd]
+  forbidden_root_cause: [dddddddddddddddddddddddddddddddddddddddd]
+  min_confidence: medium
+  canary: GROUND-TRUTH-CANARY-DO-NOT-LEAK
+  reachability:
+    - fact: the causal deploy lowered the worker memory limit from 512Mi to 128Mi
+      tool: get_incident_diff
+      field: focus.deployments[].commit.files_changed[].hunks
+      value_contains: [memory, 512Mi, 128Mi]
+    - fact: Kubernetes Pod status reports OOMKilled
+      tool: get_error_telemetry
+      field: top_templates[].exemplar.sample_message
+      value_contains: [OOMKilled]
+    - fact: memory failures rose above baseline
+      tool: get_error_telemetry
+      field: top_templates[].delta
+      value_predicate: "> 0"

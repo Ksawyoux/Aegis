@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
 from pydantic import BaseModel, Field
+from sqlalchemy import Engine, update
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
+from aegis.agent.summary import IncidentSummary
+from aegis.app.records import DeliveryOutcome, IncidentRecord
+from aegis.app.render import render_markdown
+from aegis.db.models import Incident
+
+LOGGER = logging.getLogger(__name__)
 
 class TraceEvent(BaseModel):
     """One JSON-safe event emitted while an investigation is running."""
@@ -31,6 +41,50 @@ class InMemorySink:
 
     def emit(self, event: TraceEvent) -> None:
         self.events.append(event)
+
+
+@dataclass
+class DatabaseSink:
+    """Buffer trace events and write the authoritative run record on demand."""
+
+    engine: Engine
+    incident_id: int
+    run_id: str
+    events: list[TraceEvent] = field(default_factory=list)
+
+    def emit(self, event: TraceEvent) -> None:
+        self.events.append(event)
+
+    def flush(
+        self,
+        *,
+        status: str,
+        summary: IncidentSummary | None = None,
+        delivery: DeliveryOutcome | None = None,
+    ) -> None:
+        """Persist one complete snapshot without masking an in-flight agent failure."""
+        record = IncidentRecord(
+            run_id=self.run_id,
+            summary=summary,
+            trace=[event.model_dump(mode="json") for event in self.events],
+            delivery=delivery,
+        )
+        try:
+            with Session(self.engine) as session, session.begin():
+                session.execute(
+                    update(Incident)
+                    .where(Incident.id == self.incident_id)
+                    .values(
+                        status=status,
+                        summary_md=render_markdown(summary) if summary is not None else None,
+                        root_cause=summary.root_cause.statement if summary is not None else None,
+                        summary_json=record.as_json(),
+                    )
+                )
+        except SQLAlchemyError:
+            # ``investigate`` emits its terminal event from a finally block. A
+            # recording failure there must never replace the underlying error.
+            LOGGER.exception("unable to persist incident run trace", extra={"run_id": self.run_id})
 
 
 class RunContext:
@@ -115,4 +169,4 @@ def _sorted_json(value: Any) -> Any:
     return value
 
 
-__all__ = ["InMemorySink", "RunContext", "TraceEvent", "TraceSink"]
+__all__ = ["DatabaseSink", "InMemorySink", "RunContext", "TraceEvent", "TraceSink"]

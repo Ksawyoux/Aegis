@@ -12,6 +12,7 @@ from aegis.app.investigate import (
     investigate,
 )
 from aegis.app.run_context import InMemorySink, RunContext
+from aegis.config import Settings
 
 
 def _request() -> InvestigationRequest:
@@ -52,6 +53,22 @@ def test_success_returns_summary_and_emits_terminal_event(monkeypatch: pytest.Mo
     assert investigate(_request(), context) == _summary()
     assert sink.events[-1].kind == "terminal"
     assert sink.events[-1].payload == {"status": "completed"}
+
+
+def test_investigate_passes_supplied_settings_to_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[object] = []
+
+    async def fake_run_agent(*args: object, **_kwargs: object) -> AgentResult:
+        captured.append(args[2])
+        return AgentResult(summary=_summary(), turns_used=2)
+
+    monkeypatch.setattr("aegis.app.investigate._run_with_transport", fake_run_agent)
+    settings = Settings(
+        database_url="postgresql+psycopg://example.invalid/aegis"
+    )
+
+    assert investigate(_request(), _context()[0], settings) == _summary()
+    assert captured == [settings]
 
 
 @pytest.mark.parametrize(

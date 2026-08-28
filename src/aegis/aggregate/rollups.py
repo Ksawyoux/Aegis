@@ -65,6 +65,60 @@ def capture_dirty_set(session: Session, *, changed: Iterable[DirtyPair]) -> Dirt
     return frozenset(changed_pairs | _normalise_dirty_pairs(existing_pairs))
 
 
+def lock_services(session: Session, service_ids: Iterable[int]) -> None:
+    """Take the per-service rollup locks up front, in ascending id order.
+
+    ``recompute`` acquires these itself, but a caller that deletes rollups or
+    locks base rows *before* calling it holds those row locks without holding
+    the advisory lock. Two such callers then deadlock: one holds the row and
+    waits for the advisory lock, the other holds the advisory lock and waits for
+    the row. Acquiring here, before any ``SELECT ... FOR UPDATE``, makes the
+    ordering total. Re-acquiring inside ``recompute`` is free -- the lock is
+    already held by this transaction.
+    """
+    ordered = sorted({int(service_id) for service_id in service_ids})
+    if not ordered:
+        return
+    session.execute(
+        text(
+            "SELECT pg_advisory_xact_lock(hashtext('rollup:' || service_id)) "
+            "FROM unnest(CAST(:service_ids AS bigint[])) AS service_id"
+        ),
+        {"service_ids": ordered},
+    )
+
+
+def delete_rollups(session: Session, *, dirty: DirtySet) -> int:
+    """Delete the rollups covering ``dirty`` before their base rows are removed.
+
+    ``error_rollups.exemplar_log_event_id`` is ``ON DELETE RESTRICT``, so any
+    caller that deletes a ``log_events`` row must first remove the rollups that
+    might cite it. A replaced row is frequently its own exemplar, which makes
+    this the common case rather than the corner one, and the failure is a
+    transaction-aborting IntegrityError rather than anything localised.
+
+    ``recompute`` performs the same deletion, but it must run *after* the base
+    rows change; this exists for the window before that.
+    """
+    dirty_pairs = _normalise_dirty_pairs(dirty)
+    if not dirty_pairs:
+        return 0
+    _load_dirty_pairs(session, dirty_pairs)
+    return len(
+        session.execute(
+            text(
+                """
+                DELETE FROM error_rollups AS rollup
+                USING aegis_dirty_rollup_minutes AS dirty
+                WHERE rollup.service_id = dirty.service_id
+                  AND rollup.bucket_start = dirty.bucket_start
+                RETURNING 1
+                """
+            )
+        ).all()
+    )
+
+
 def recompute(session: Session, *, dirty: DirtySet) -> RollupReport:
     """Delete and exactly rebuild rollups for an explicit pre-captured dirty set.
 

@@ -1,0 +1,14 @@
+[
+  {
+    "applied_at": "2026-08-20T00:01:30Z",
+    "apply_id": "apply-payments-pool-20260820-000130",
+    "plan_file": "plan-payments-pool.json",
+    "status": "success"
+  },
+  {
+    "applied_at": "2026-08-20T21:01:30Z",
+    "apply_id": "apply-cdn-cache-20260820-210130",
+    "plan_file": "plan-cdn-cache.json",
+    "status": "success"
+  }
+]

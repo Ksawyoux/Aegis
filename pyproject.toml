@@ -19,8 +19,10 @@ dependencies = [
     "pyyaml",
     "python-dateutil",
     "fastmcp",
-    "anthropic[mcp]",
     "httpx",
+    "fastapi",
+    "uvicorn[standard]",
+    "openai>=3.3.1",
 ]
 
 [project.scripts]
@@ -45,6 +47,9 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# Agent worktrees live inside the repo and hold another milestone's
+# in-progress code; linting them reports failures this tree cannot fix.
+exclude = [".claude/worktrees"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

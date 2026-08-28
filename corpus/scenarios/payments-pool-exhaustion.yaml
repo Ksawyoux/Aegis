@@ -1,0 +1,36 @@
+name: payments-pool-exhaustion
+alert:
+  service: payments-api
+  alert_name: PoolExhaustion
+  dedup_key: pd-payments-pool-0001
+  fired_at: "2026-08-20T00:10:00Z"
+  window_start: "2026-08-19T23:40:00Z"
+  window_end: "2026-08-20T00:15:00Z"
+  payload: {summary: "payment pool errors", severity: critical}
+expect:
+  service: payments-api
+  root_cause_contains: [pool, max_connections]
+  must_cite:
+    - "infra:1d0a71b64d103692c1ca54f854947aea"
+    - "rollup:payments-api/2026-08-20T00:03:00Z/5xx/error/9455b8328bc5a51548dd7a2edad17080"
+  ruled_out_contains: [deploy]
+  forbidden_root_cause: [deploy]
+  min_confidence: medium
+  canary: GROUND-TRUTH-CANARY-DO-NOT-LEAK
+  reachability:
+    - fact: Terraform deleted the max_connections override
+      tool: get_incident_diff
+      field: focus.infra_changes[].action
+      value_contains: [delete]
+    - fact: the deleted max_connections override was set to 100
+      tool: get_incident_diff
+      field: focus.infra_changes[].attribute_diff.value.before
+      value_contains: ["100"]
+    - fact: no production deployment exists in the change window
+      tool: get_incident_diff
+      field: focus.deployments
+      value_predicate: is empty
+    - fact: pool-exhaustion errors rose above baseline
+      tool: get_error_telemetry
+      field: top_templates[].delta
+      value_predicate: "> 0"

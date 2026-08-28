@@ -15,13 +15,24 @@ from typing import Any, TypeAlias
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from aegis.db.models import Commit, Deployment, ErrorRollup, InfraChange, LogEvent, Service
+from aegis.db.models import (
+    Commit,
+    Deployment,
+    ErrorRollup,
+    InfraChange,
+    LogEvent,
+    Postmortem,
+    PostmortemChunk,
+    Service,
+)
+from aegis.embeddings import EmbeddingProvider
 from aegis.ingest.timewindow import ResolvedWindow, baseline_window, resolve_window
 from aegis.mcp_server.citations import (
     format_commit,
     format_deploy,
     format_infra,
     format_log,
+    format_postmortem,
     format_rollup,
 )
 from aegis.mcp_server.schemas import (
@@ -32,6 +43,7 @@ from aegis.mcp_server.schemas import (
     Exemplar,
     Frame,
     IncidentDiff,
+    PostmortemHit,
     SeriesPoint,
     ServiceChanges,
     StatusBreakdownEntry,
@@ -53,6 +65,74 @@ class QueryError(ValueError):
     """Raised for invalid MCP-query arguments that the server maps to ``ToolError``."""
 
 
+def search_similar_postmortems(
+    session: Session,
+    *,
+    error_signature: str,
+    k: int = 5,
+    service: str | None = None,
+    provider: EmbeddingProvider,
+) -> list[PostmortemHit]:
+    """Return nearest distinct postmortems; Event occurrence totals never affect ranking."""
+    if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
+        raise QueryError("k must be a positive integer")
+    if (
+        service is not None
+        and session.scalar(select(Service.id).where(Service.name == service)) is None
+    ):
+        raise QueryError("unknown service")
+    vector = provider.embed([error_signature])[0]
+    distance = PostmortemChunk.embedding.cosine_distance(vector).label("distance")
+    statement = select(PostmortemChunk, Postmortem, distance).join(
+        Postmortem, PostmortemChunk.postmortem_id == Postmortem.id
+    )
+    if service is not None:
+        statement = statement.where(Postmortem.services.contains([service]))
+    rows = session.execute(
+        statement.where(distance <= 0.65).order_by(
+            distance.asc(), Postmortem.slug.asc(), PostmortemChunk.ordinal.asc()
+        )
+    ).all()
+    hits: list[PostmortemHit] = []
+    seen: set[str] = set()
+    for chunk, postmortem, value in rows:
+        if postmortem.slug in seen:
+            continue
+        seen.add(postmortem.slug)
+        resolution = session.scalar(
+            select(PostmortemChunk)
+            .where(
+                PostmortemChunk.postmortem_id == postmortem.id, PostmortemChunk.kind == "resolution"
+            )
+            .order_by(PostmortemChunk.ordinal)
+        )
+        hits.append(
+            PostmortemHit(
+                cite=format_postmortem(postmortem.slug, postmortem.content_sha, chunk.ordinal),
+                resolution_cite=format_postmortem(
+                    postmortem.slug, postmortem.content_sha, resolution.ordinal
+                )
+                if resolution
+                else None,
+                slug=postmortem.slug,
+                title=postmortem.title,
+                occurred_at=postmortem.occurred_at,
+                snippet=_snippet(chunk.content),
+                resolution_md=postmortem.resolution_md,
+                similarity=1 - float(value),
+            )
+        )
+        if len(hits) == k:
+            break
+    return hits
+
+
+def _snippet(value: str) -> str:
+    if len(value) <= 500:
+        return value
+    return value[:500].rsplit(" ", 1)[0]
+
+
 def get_incident_diff(
     session: Session,
     *,
@@ -62,12 +142,7 @@ def get_incident_diff(
     lookback_minutes: int = 60,
     include_other_services: bool = True,
 ) -> IncidentDiff:
-    """Return focus-service changes in ``[resolved.start - lookback, resolved.end)``.
-
-    The returned window is the actual queried range, including the lookback,
-    rather than the caller's original incident window.  ``other_services`` is
-    intentionally unpopulated in v0.1.
-    """
+    """Return changes for the focus service and active peer services."""
     resolved = resolve_window(window_start, window_end)
     if isinstance(lookback_minutes, bool) or not isinstance(lookback_minutes, int):
         raise QueryError("lookback_minutes must be a non-negative integer")
@@ -81,33 +156,9 @@ def get_incident_diff(
     )
     focus_service = _service_by_name(session, service)
 
-    deployments = list(
-        session.execute(
-            select(Deployment, Commit)
-            .join(Commit, Deployment.commit_sha == Commit.sha)
-            .where(
-                Deployment.service_id == focus_service.id,
-                Deployment.started_at >= query_window.start,
-                Deployment.started_at < query_window.end,
-            )
-            .order_by(Deployment.started_at.desc(), Deployment.uid.asc())
-        ).tuples()
-    )
-    deployed_shas = {deployment.commit_sha for deployment, _ in deployments}
-    commits = list(
-        session.scalars(
-            select(Commit)
-            .where(
-                Commit.service_id == focus_service.id,
-                Commit.committed_at >= query_window.start,
-                Commit.committed_at < query_window.end,
-            )
-            .order_by(Commit.committed_at.desc(), Commit.sha.asc())
-        )
-    )
+    focus = _service_changes(session, focus_service, query_window)
     # A deployment already carries its commit.  The top-level list is therefore
     # for commits that are otherwise standalone in this diff response.
-    standalone_commits = [commit for commit in commits if commit.sha not in deployed_shas]
 
     unattributed = list(
         session.scalars(
@@ -122,33 +173,68 @@ def get_incident_diff(
     )
     # ``counts`` is focus-only.  Count separately instead of deriving it from
     # ``unattributed``, which is necessarily outside the focus service.
-    focus_infra_count = len(
-        session.scalars(
-            select(InfraChange.id).where(
-                InfraChange.service_id == focus_service.id,
-                InfraChange.applied_at >= query_window.start,
-                InfraChange.applied_at < query_window.end,
-            )
-        ).all()
-    )
-
-    del include_other_services  # The v0.1 contract returns this block empty for both values.
+    others = []
+    if include_other_services:
+        for candidate in session.scalars(
+            select(Service).where(Service.id != focus_service.id).order_by(Service.name)
+        ):
+            changes = _service_changes(session, candidate, query_window)
+            if changes.commits or changes.deployments or changes.infra_changes:
+                others.append(changes)
     return IncidentDiff(
         window=ResponseWindow.from_ingest(query_window),
-        focus=ServiceChanges(
-            service=focus_service.name,
-            commits=[_commit_ref(commit) for commit in standalone_commits],
-            deployments=[
-                _deployment_ref(deployment, commit) for deployment, commit in deployments
-            ],
-        ),
-        other_services=[],
+        focus=focus,
+        other_services=others,
         unattributed=[_infra_change(change) for change in unattributed],
         counts=DiffCounts(
-            commits=len(standalone_commits),
-            deployments=len(deployments),
-            infra_changes=focus_infra_count,
+            commits=len(focus.commits),
+            deployments=len(focus.deployments),
+            infra_changes=len(focus.infra_changes),
         ),
+    )
+
+
+def _service_changes(session: Session, service: Service, window: ResolvedWindow) -> ServiceChanges:
+    deployments = list(
+        session.execute(
+            select(Deployment, Commit)
+            .join(Commit, Deployment.commit_sha == Commit.sha)
+            .where(
+                Deployment.service_id == service.id,
+                Deployment.started_at >= window.start,
+                Deployment.started_at < window.end,
+            )
+            .order_by(Deployment.started_at.desc(), Deployment.uid.asc())
+        ).tuples()
+    )
+    deployed_shas = {deployment.commit_sha for deployment, _ in deployments}
+    commits = list(
+        session.scalars(
+            select(Commit)
+            .where(
+                Commit.service_id == service.id,
+                Commit.committed_at >= window.start,
+                Commit.committed_at < window.end,
+            )
+            .order_by(Commit.committed_at.desc(), Commit.sha.asc())
+        )
+    )
+    infra = list(
+        session.scalars(
+            select(InfraChange)
+            .where(
+                InfraChange.service_id == service.id,
+                InfraChange.applied_at >= window.start,
+                InfraChange.applied_at < window.end,
+            )
+            .order_by(InfraChange.applied_at.desc(), InfraChange.uid.asc())
+        )
+    )
+    return ServiceChanges(
+        service=service.name,
+        commits=[_commit_ref(row) for row in commits if row.sha not in deployed_shas],
+        deployments=[_deployment_ref(deployment, commit) for deployment, commit in deployments],
+        infra_changes=[_infra_change(row, service.name) for row in infra],
     )
 
 
@@ -196,6 +282,23 @@ def get_error_telemetry(
         )
         for identity in identities
     ]
+    for anomaly in templates:
+        event_rows = session.scalars(
+            select(LogEvent).where(
+                LogEvent.service_id == focus_service.id,
+                LogEvent.ts >= effective.start,
+                LogEvent.ts < effective.end,
+                LogEvent.template_hash == anomaly.template_hash,
+                LogEvent.level == anomaly.level,
+            )
+        )
+        counts: list[int] = [
+            int(row.attrs["occurrence_count"])
+            for row in event_rows
+            if row.attrs.get("source") == "k8s"
+            and isinstance(row.attrs.get("occurrence_count"), int)
+        ]
+        anomaly.occurrence_count = sum(counts) if counts else None
 
     breakdown_by_status: dict[str, list[ErrorRollup]] = defaultdict(list)
     for rollup, _ in current_rows:
@@ -263,7 +366,7 @@ def _deployment_ref(deployment: Deployment, commit: Commit) -> DeploymentRef:
     )
 
 
-def _infra_change(change: InfraChange) -> InfraChangeResponse:
+def _infra_change(change: InfraChange, service: str | None = None) -> InfraChangeResponse:
     return InfraChangeResponse(
         cite=format_infra(change.uid),
         provider=change.provider,
@@ -272,7 +375,7 @@ def _infra_change(change: InfraChange) -> InfraChangeResponse:
         action=change.action,
         attribute_diff=change.attribute_diff,
         applied_at=change.applied_at,
-        service=None,
+        service=service,
     )
 
 
@@ -400,6 +503,11 @@ def _number_attr(attrs: dict[str, Any], key: str) -> float | None:
 
 
 def _top_frame(attrs: dict[str, Any]) -> Frame | None:
+    direct = attrs.get("top_frame")
+    if isinstance(direct, dict):
+        file, line, func = direct.get("file"), direct.get("line"), direct.get("func")
+        if isinstance(file, str) and type(line) is int and isinstance(func, str):
+            return Frame(file=file, line=line, func=func)
     stack = attrs.get("stack")
     if not isinstance(stack, list):
         return None
@@ -414,4 +522,4 @@ def _top_frame(attrs: dict[str, Any]) -> Frame | None:
     return None
 
 
-__all__ = ["QueryError", "get_error_telemetry", "get_incident_diff"]
+__all__ = ["QueryError", "get_error_telemetry", "get_incident_diff", "search_similar_postmortems"]

@@ -1,0 +1,21 @@
+checkout-api.log:
+  service: checkout-api
+  format: json-lines
+  timezone: UTC
+payments-api.log:
+  service: payments-api
+  format: logfmt
+  timezone: UTC
+search-api.log:
+  service: search-api
+  format: python-traceback
+  timezone: UTC
+  sealed: true
+auth-api.log:
+  service: auth-api
+  format: nginx
+  timezone: UTC
+cdn-api.log:
+  service: cdn-api
+  format: nginx
+  timezone: UTC

@@ -317,11 +317,13 @@ class ServiceChanges(BaseModel):
     service: str
     commits: list[CommitRef]
     deployments: list[DeploymentRef]
+    infra_changes: list[InfraChange] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _order_nested_rows(self) -> Self:
         self.commits = sorted(self.commits, key=commits_order_key)
         self.deployments = sorted(self.deployments, key=deployments_order_key)
+        self.infra_changes = sorted(self.infra_changes, key=unattributed_order_key)
         return self
 
 
