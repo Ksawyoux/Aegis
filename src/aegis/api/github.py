@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from pydantic import ValidationError
 from sqlalchemy import Engine, select, text
@@ -38,6 +38,7 @@ from aegis.db.models import Service
 from aegis.ingest.git import GitExport, upsert_commits
 from aegis.ingest.normalize import ServiceRegistry
 from aegis.ingest.textnorm import normalize_repo
+from aegis.review.service import review_commit, review_pull_request
 
 router = APIRouter()
 
@@ -111,6 +112,7 @@ def verify_github_signature(*, body: bytes, supplied: str | None, secret: str) -
 @router.post("/webhooks/github")
 async def github_webhook(
     request: Request,
+    background: BackgroundTasks,
     settings: Settings = Depends(get_settings),
     engine: Engine = Depends(get_engine),
 ) -> Response:
@@ -167,6 +169,12 @@ async def github_webhook(
                 push_result.unchanged,
                 delivery_id,
             )
+            head_sha = parsed.get("after")
+            if isinstance(head_sha, str) and _valid_sha(head_sha):
+                background.add_task(
+                    review_commit, engine, repo=push_result.repo, sha=head_sha,
+                    service_name=_service_name_for_repo(engine, push_result.repo),
+                )
             return JSONResponse(
                 status_code=202,
                 content={
@@ -186,6 +194,19 @@ async def github_webhook(
             len(pr_result.deferred_shas),
             delivery_id,
         )
+        action = parsed.get("action")
+        head_sha = (parsed.get("pull_request") or {}).get("head", {}).get("sha")
+        reviewable_pr = (
+            action in ("opened", "synchronize")
+            and isinstance(head_sha, str)
+            and _valid_sha(head_sha) is not None
+        )
+        if reviewable_pr:
+            background.add_task(
+                review_pull_request, engine, repo=pr_result.repo,
+                pr_number=pr_result.pr_number, head_sha=head_sha,
+                service_name=_service_name_for_repo(engine, pr_result.repo),
+            )
         return JSONResponse(
             status_code=202,
             content={
@@ -451,6 +472,13 @@ def _handle_pull_request(
 
 def _registry_from_session(session: Session) -> ServiceRegistry:
     return ServiceRegistry.load(session.scalars(select(Service).order_by(Service.name)).all())
+
+
+def _service_name_for_repo(engine: Engine, repo: str) -> str | None:
+    """Resolve the service name for a registered repo; None when unregistered."""
+    with Session(engine) as session:
+        service = session.scalar(select(Service).where(Service.repo == repo))
+        return service.name if service is not None else None
 
 
 __all__ = [

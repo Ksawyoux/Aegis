@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aegis Context — how one alert becomes cited evidence</title>
+<style>
+  :root {
+    --bg:#0b0e14; --panel:#11151f; --panel2:#151b29; --line:#232b3d;
+    --text:#c0caf5; --dim:#7d86ad; --accent:#7aa2f7; --good:#9ece6a;
+    --warn:#e0af68; --bad:#f7768e; --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; }
+  code, pre, .mono { font-family:var(--mono); font-size:12.5px; }
+  pre { background:#0d1019; border:1px solid var(--line); border-radius:8px;
+        padding:12px 14px; overflow:auto; max-height:340px; }
+  a { color:var(--accent); }
+  header { padding:56px 24px 24px; max-width:1180px; margin:0 auto; }
+  h1 { font-size:clamp(26px,4vw,42px); margin:0 0 8px; letter-spacing:-.02em; }
+  h1 em { color:var(--accent); font-style:normal; }
+  .sub { color:var(--dim); max-width:760px; }
+  section { max-width:1180px; margin:48px auto; padding:0 24px; }
+  h2 { font-size:22px; margin:0 0 4px; letter-spacing:-.01em; }
+  .hint { color:var(--dim); margin:0 0 18px; font-size:14px; }
+
+  /* stat strip */
+  .stats { display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:10px 16px; min-width:110px; }
+  .stat b { display:block; font-size:22px; color:var(--accent); font-family:var(--mono); }
+  .stat span { color:var(--dim); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+
+  /* reveal animation */
+  .reveal { opacity:0; transform:translateY(14px); transition:.7s ease; }
+  .reveal.on { opacity:1; transform:none; }
+
+  /* pipeline */
+  .pipewrap { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+              padding:10px; position:relative; }
+  svg.map { width:100%; height:auto; display:block; }
+  .node { cursor:pointer; }
+  .node rect, .node polygon, .node path.shape { fill:var(--panel2); stroke:var(--line); transition:.2s; }
+  .node:hover rect, .node.sel rect, .node:hover polygon, .node.sel polygon,
+  .node:hover path.shape, .node.sel path.shape { stroke:var(--accent); fill:#182136; }
+  .node text { fill:var(--text); font:12px system-ui; pointer-events:none; }
+  .node .small { fill:var(--dim); font-size:10.5px; }
+  .flow { stroke:#3b4a75; stroke-width:1.6; fill:none; stroke-dasharray:5 9;
+          animation:dash 3.2s linear infinite; }
+  @media (prefers-reduced-motion: reduce) { .flow { animation:none; } }
+  @keyframes dash { to { stroke-dashoffset:-140; } }
+
+  /* drawer */
+  .drawer { margin-top:12px; background:var(--panel2); border:1px solid var(--line);
+            border-radius:10px; padding:14px 16px; min-height:90px; }
+  .drawer h3 { margin:0 0 6px; font-size:15px; color:var(--accent); }
+  .drawer ul { margin:6px 0 0; padding-left:18px; }
+  .drawer li { margin:3px 0; }
+  .drawer .why { color:var(--warn); font-size:13px; margin-top:8px; }
+
+  /* chart */
+  .chartwrap { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .legend { display:flex; gap:18px; color:var(--dim); font-size:13px; margin-bottom:10px; flex-wrap:wrap; }
+  .key { display:inline-block; width:11px; height:11px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+  #spikebars rect.bar { fill:#3b4a75; transition:height .8s cubic-bezier(.2,.8,.2,1), y .8s cubic-bezier(.2,.8,.2,1); }
+  #spikebars rect.hot { fill:var(--bad); }
+  #spikebars text { fill:var(--dim); font:11px var(--mono); }
+
+  /* replay */
+  .steps { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; }
+  .stepbtn { background:var(--panel2); border:1px solid var(--line); color:var(--dim);
+             border-radius:999px; padding:7px 14px; cursor:pointer; font-size:13px; }
+  .stepbtn.on { color:#fff; border-color:var(--accent); background:#182136; }
+  .stagebox { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .stagetitle { color:var(--accent); font-weight:600; margin-bottom:8px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0; }
+  .chip { font-family:var(--mono); font-size:11.5px; padding:3px 9px; border-radius:999px;
+          border:1px solid var(--line); background:#0d1019; color:var(--good); word-break:break-all; }
+  .chip.dim { color:var(--dim); }
+  .verdict { border-radius:10px; padding:12px 16px; margin-top:12px; font-weight:600; }
+  .verdict.ok { background:rgba(158,206,106,.08); border:1px solid rgba(158,206,106,.4); color:var(--good); }
+  details { margin-top:12px; color:var(--dim); }
+  summary { cursor:pointer; }
+
+  /* live feed */
+  .livetop { display:flex; align-items:center; gap:10px; margin-bottom:12px; font-size:14px; }
+  .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+  .dot.on { background:var(--good); box-shadow:0 0 8px var(--good); animation:pulse 1.6s infinite; }
+  .dot.off { background:var(--bad); }
+  @keyframes pulse { 50% { opacity:.4; } }
+  .dimtext { color:var(--dim); font-size:12.5px; font-family:var(--mono); margin-left:auto; }
+  table.feed td, table.feed th { padding:7px 12px; }
+  tr.newrow { animation:flashin 1.6s ease-out; }
+  @keyframes flashin { from { background:rgba(122,162,247,.25);} to { background:transparent;} }
+  .kindcommit { color:var(--good); } .kinddeploy { color:var(--warn); } .kindinfra { color:var(--accent); }
+
+  /* grammar */
+  table { width:100%; border-collapse:collapse; background:var(--panel);
+          border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+  th, td { text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); font-size:13.5px; }
+  th { color:var(--dim); text-transform:uppercase; font-size:11px; letter-spacing:.07em; }
+  td:first-child { font-family:var(--mono); color:var(--warn); white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
+
+  footer { max-width:1180px; margin:40px auto 64px; padding:0 24px; color:var(--dim);
+           font-size:13px; }
+  footer b { color:var(--text); }
+</style>
+</head>
+<body>
+<script id="viz-data" type="application/json">__VIZ_DATA__</script>
+
+<header>
+  <h1>How an alert becomes <em>cited evidence</em></h1>
+  <p class="sub">Every number below was produced by this repository's real ingest pipeline over its committed
+     corpus, and the investigation replay at the bottom is a recorded run through the production
+     transport, SQL, and provenance validator. Nothing on this page is illustrative filler.</p>
+  <div class="stats" id="stats"></div>
+</header>
+
+<section id="live" class="reveal">
+  <h2>Live evidence feed</h2>
+  <p class="hint">Polls <code>/viz/live</code> on the running API every 4 seconds. Push a commit to a
+     registered repo and watch it appear here — that is the GitHub webhook ingesting real evidence.</p>
+  <div class="chartwrap">
+    <div class="livetop">
+      <span id="livedot" class="dot off"></span><span id="livestate">connecting…</span>
+      <span id="lastpoll" class="dimtext"></span>
+    </div>
+    <table class="feed">
+      <thead><tr><th>when</th><th>service</th><th>kind</th><th>detail</th></tr></thead>
+      <tbody id="feedbody"><tr><td colspan="4" style="color:var(--dim)">waiting for first poll…</td></tr></tbody>
+    </table>
+    <p class="hint" style="margin-top:10px" id="wm"></p>
+  </div>
+</section>
+
+<section id="pipeline" class="reveal">
+  <h2>The pipeline, end to end</h2>
+  <p class="hint">Correlate at ingest, not at query time. Click any node to see the actual data at that stage.</p>
+  <div class="pipewrap">
+    <svg class="map" viewBox="0 0 1240 560" role="img" aria-label="Aegis Context pipeline">
+      <!-- sources -->
+      <g class="node" data-node="git"><rect x="20"  y="26" width="200" height="58" rx="10"/>
+        <text x="36" y="50">git export</text><text class="small" x="36" y="68">commits · deploys · hunks</text></g>
+      <g class="node" data-node="logs"><rect x="252" y="26" width="200" height="58" rx="10"/>
+        <text x="268" y="50">logs</text><text class="small" x="268" y="68">json · nginx · python · logfmt</text></g>
+      <g class="node" data-node="terraform"><rect x="484" y="26" width="200" height="58" rx="10"/>
+        <text x="500" y="50">terraform</text><text class="small" x="500" y="68">plan ∩ applies (success)</text></g>
+      <g class="node" data-node="k8s"><rect x="716" y="26" width="180" height="58" rx="10"/>
+        <text x="732" y="50">kubernetes</text><text class="small" x="732" y="68">pod-status · events</text></g>
+      <g class="node" data-node="pm"><rect x="928" y="26" width="200" height="58" rx="10"/>
+        <text x="944" y="50">postmortems</text><text class="small" x="944" y="68">markdown → chunks → vectors</text></g>
+
+      <path class="flow" d="M120 84 V116 H240 V138"/>
+      <path class="flow" d="M352 84 V138"/>
+      <path class="flow" d="M584 84 V116 H464 V138"/>
+      <path class="flow" d="M806 84 V116 H632 V138"/>
+      <path class="flow" d="M1028 84 V520 H1128"/>
+
+      <!-- etl chain -->
+      <g class="node" data-node="uid"><rect x="160" y="138" width="160" height="52" rx="10"/>
+        <text x="176" y="159">source_uid</text><text class="small" x="176" y="177">content-derived, first</text></g>
+      <g class="node" data-node="resolve"><rect x="380" y="138" width="168" height="52" rx="10"/>
+        <text x="396" y="159">resolve_service()</text><text class="small" x="396" y="177">name → keys → k8s → repo</text></g>
+      <g class="node" data-node="level"><rect x="608" y="138" width="160" height="52" rx="10"/>
+        <text x="624" y="159">canonical_level()</text><text class="small" x="624" y="177">nginx: status ⇒ level</text></g>
+      <g class="node" data-node="mask"><rect x="828" y="138" width="180" height="52" rx="10"/>
+        <text x="844" y="159">template masking</text><text class="small" x="844" y="177">one pass · sentinels</text></g>
+
+      <path class="flow" d="M320 164 H380"/>
+      <path class="flow" d="M548 164 H608"/>
+      <path class="flow" d="M768 164 H828"/>
+      <path class="flow" d="M1008 164 V220 H940"/>
+
+      <g class="node" data-node="unres"><rect x="380" y="238" width="168" height="48" rx="10"/>
+        <text x="396" y="258" fill="#e0af68">unresolved_events</text><text class="small" x="396" y="275">never a NULL service_id</text></g>
+      <path class="flow" d="M464 190 V238" style="stroke:#6b5b34"/>
+
+      <g class="node" data-node="pg"><rect x="700" y="220" width="460" height="128" rx="12"/>
+        <text x="720" y="248">PostgreSQL + pgvector — one schema · one clock</text>
+        <text class="small" x="720" y="270">services · commits · deployments · infra_changes</text>
+        <text class="small" x="720" y="287">log_events · unresolved_events · error_rollups</text>
+        <text class="small" x="720" y="304">postmortems · postmortem_chunks(vector 1024)</text>
+        <text class="small" x="720" y="321">incidents · ingest_watermarks</text></g>
+      <g class="node" data-node="rollup"><rect x="470" y="330" width="200" height="52" rx="10"/>
+        <text x="486" y="351">error_rollups</text><text class="small" x="486" y="369">delete + recompute, minute PK</text></g>
+      <path class="flow" d="M670 300 V356 H670" />
+      <path class="flow" d="M700 340 H670"/>
+
+      <!-- serving -->
+      <path class="flow" d="M930 348 V396"/>
+      <g class="node" data-node="agent"><rect x="700" y="396" width="230" height="66" rx="12"/>
+        <text x="716" y="421">single agent</text><text class="small" x="716" y="440">gpt-5.6-luna · reasoning effort high</text></g>
+      <g class="node" data-node="gate"><polygon points="1075,382 1190,429 1075,476 960,429"/>
+        <text x="1022" y="425">provenance</text><text class="small" x="1032" y="442">gate</text></g>
+      <path class="flow" d="M930 429 H960"/>
+      <path class="flow" d="M1075 476 V512 H930" />
+      <g class="node" data-node="out"><rect x="700" y="498" width="230" height="48" rx="12"/>
+        <text x="716" y="518">CLI · Slack · stored trace</text><text class="small" x="716" y="536">every claim carries citations</text></g>
+
+      <g class="node" data-node="mcp"><rect x="80" y="396" width="540" height="150" rx="12"/>
+        <text x="96" y="421">MCP server — stdio subprocess · aggregate-only</text>
+        <g class="node" data-node="t-diff"><rect x="100" y="440" width="156" height="44" rx="8"/>
+          <text x="112" y="458">get_incident_diff</text><text class="small mono" x="112" y="474">commit·deploy·infra</text></g>
+        <g class="node" data-node="t-tel"><rect x="270" y="440" width="166" height="44" rx="8"/>
+          <text x="282" y="458">get_error_telemetry</text><text class="small mono" x="282" y="474">rollup·log</text></g>
+        <g class="node" data-node="t-pm"><rect x="450" y="440" width="156" height="44" rx="8"/>
+          <text x="462" y="458">…postmortems</text><text class="small mono" x="462" y="474">postmortem:</text></g>
+        <text class="small" x="100" y="512">the agent never touches SQL — if a tool didn't return it this run, citing it aborts the run</text></g>
+      <path class="flow" d="M620 470 H700"/>
+    </svg>
+    <div class="drawer" id="drawer"><h3>Pipeline map</h3>
+      <ul><li>This is the whole system: normalize everything once, serve aggregates only.</li>
+      <li>Click any node above — every example shown comes from the committed corpus or the recorded run.</li></ul>
+    </div>
+  </div>
+</section>
+
+<section id="spike" class="reveal">
+  <h2>One service's 5xx series around the incident</h2>
+  <p class="hint">Real rows from <code>error_rollups</code> for checkout-api, exactly what
+     <code>get_error_telemetry</code> ranks against the preceding disjoint baseline window.</p>
+  <div class="chartwrap">
+    <div class="legend">
+      <span><span class="key" style="background:#3b4a75"></span>5xx events per minute</span>
+      <span><span class="key" style="background:var(--bad)"></span>spike minute (top template Δ)</span>
+      <span id="baseline-note"></span>
+    </div>
+    <svg id="spikebars" viewBox="0 0 1140 210" width="100%"></svg>
+  </div>
+</section>
+
+<section id="replay" class="reveal">
+  <h2>Recorded investigation, step by step</h2>
+  <p class="hint">Scenario <code id="scen-name"></code> — use ← → keys. The tool result and citations are
+     unmodified output of the production code path.</p>
+  <div class="steps" id="steps"></div>
+  <div class="stagebox" id="stage"></div>
+</section>
+
+<section id="grammar" class="reveal">
+  <h2>Citation grammar — the contract between tools and claims</h2>
+  <table>
+    <tr><th>prefix</th><th>evidence row</th><th>returned by</th></tr>
+    <tr><td>commit:&lt;sha40&gt;</td><td>a commit with hunks</td><td>get_incident_diff</td></tr>
+    <tr><td>deploy:&lt;uid32&gt;</td><td>a deployment lifecycle row</td><td>get_incident_diff</td></tr>
+    <tr><td>infra:&lt;uid32&gt;</td><td>a gated terraform apply</td><td>get_incident_diff</td></tr>
+    <tr><td>log:&lt;uid32&gt;</td><td>one log event (exemplar)</td><td>get_error_telemetry</td></tr>
+    <tr><td>rollup:&lt;svc&gt;/&lt;iso&gt;/&lt;class&gt;/&lt;level&gt;/&lt;hash&gt;</td><td>one minute-bucket aggregate</td><td>get_error_telemetry</td></tr>
+    <tr><td>postmortem:&lt;slug&gt;@&lt;sha8&gt;#&lt;n&gt;</td><td>one chunk of a past postmortem</td><td>search_similar_postmortems</td></tr>
+  </table>
+</section>
+
+<footer>
+  <p><b>Honesty note.</b> Ingest, storage, rollups, the MCP stdio boundary, and provenance validation are
+     this repository's production code operating on its committed corpus. The embedding endpoint and the
+     language model behind the recorded investigation were served by local mocks during capture, so the
+     summary's wording is synthetic — but its citation resolves to a real <code>log_events</code> row, and
+     the validator would have aborted had it not been genuinely returned by a tool this run.</p>
+</footer>
+
+<script>
+const DATA = JSON.parse(document.getElementById('viz-data').textContent);
+const M = DATA.metrics, S = DATA.sources, INV = DATA.investigation;
+
+/* ---------- stat strip ---------- */
+const STAT_LABELS = [["services","services"],["commits","commits"],["deployments","deploys"],
+  ["log_events","log events"],["error_rollups","rollup rows"],["infra_changes","infra changes"],
+  ["postmortem_chunks","pm chunks"],["unresolved_events","unresolved"]];
+document.getElementById('stats').innerHTML = STAT_LABELS.map(([k,l]) =>
+  `<div class="stat"><b>${M.counts[k]}</b><span>${l}</span></div>`).join('');
+
+/* ---------- node drawer ---------- */
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function pre(s){ return `<pre>${esc(typeof s==='string'?s:JSON.stringify(s,null,2))}</pre>`; }
+const NODE_INFO = {
+  git: { t:'git export', body:`<p>Author <b>${esc(S.git.author)}</b> touched monitoring config minutes before the spike:</p>`
+      + pre(S.git.hunk)
+      + `<p>Deployment <span class="mono">${esc(S.git.deploy.commit_sha.slice(0,12))}…</span> → ${esc(S.git.deploy.environment)} at ${esc(S.git.deploy.started_at)} (${esc(S.git.deploy.status)}).</p>`
+      + `<p class="why">Why it matters: the deploy lands inside the lookback window, so get_incident_diff will surface it as the focus change.</p>` },
+  logs: { t:'logs — raw line in, template out', body:`<p>One physical line from checkout-api.log:</p>`
+      + pre(S.logs.raw_line)
+      + `<p>After normalization the free text becomes a reusable template:</p>`
+      + pre(`${S.logs.msg_raw}\n↓ mask()\n${S.logs.msg_masked}\n↓ sha256[:32]\n${S.logs.template_hash}`)
+      + `<p class="why">Why one pass with sentinels: sequential substitution would let a later rule rewrite an earlier rule's sentinel, giving two identical messages two different hashes.</p>` },
+  terraform: { t:'terraform — intended ≠ applied', body:`<p>A plan alone has no execution evidence and no timestamp, so it is not ingested. Only plans matching a successful record in applies.json enter <code>infra_changes</code>:</p>`
+      + pre({apply_id:S.terraform.apply_id, applied_at:S.terraform.applied_at, status:S.terraform.status})
+      + `<p class="why">Why: otherwise the agent could cite an abandoned plan as the root cause of an outage.</p>` },
+  k8s: { t:'kubernetes snapshots', body:`<p>${S.k8s.pods} pod statuses and ${S.k8s.events} event kinds in the corpus. Example event (count=${S.k8s.event_count}):</p>`
+      + pre(S.k8s.event_message)
+      + `<p class="why">occurrence_count never affects anomaly ranking — chatty Events must not drown quiet log templates.</p>` },
+  pm: { t:'postmortems', body:`<p>Each markdown postmortem is fingerprinted, split into chunks, embedded (1024-dim vectors), and stored for cosine search. ${M.counts.postmortems} documents → ${M.counts.postmortem_chunks} chunks here.</p>`
+      + `<p class="why">Vector search is used for exactly one thing: finding prose that resembles other prose. Telemetry is fetched by SQL because exact counts beat approximate ones.</p>` },
+  uid: { t:'source_uid — identity before normalisation', body:`<p>A crashed batch stays replayable because identity is derived from raw content before any normalisation runs; ON CONFLICT DO NOTHING makes replays no-ops.</p>`
+      + `<p class="why">Derive identity after normalisation and changing the normaliser silently rewrites history.</p>` },
+  resolve: { t:'resolve_service()', body:`<p>Resolution ladder for checkout-api, straight from services.yaml:</p>`
+      + pre(S.resolve)
+      + `<p>No match → the line goes to unresolved_events, never to a NULL service_id — the rollup primary key would fail on the first unattributable line rather than the thousandth.</p>` },
+  level: { t:'canonical_level()', body:`<p>Formats disagree; the schema may not. nginx derives level from status (5xx ⇒ error), so cross-service rollups share one vocabulary: debug/info/warning/error/fatal.</p>` },
+  mask: { t:'template masking', body:`<p>Single pass, sentinel-based:</p>` + pre(`${S.logs.msg_raw}\n→ ${S.logs.msg_masked}\n→ template_hash ${S.logs.template_hash}`)
+      + `<p class="why">The hash is what error_rollups is keyed on — identical messages collapse into one anomaly series.</p>` },
+  unres: { t:'unresolved_events', body:`<p>${M.counts.unresolved_events} line in this corpus could not be attributed:</p>`
+      + (M.unresolved_example ? pre(M.unresolved_example) : '') + `<p class="why">Stored, counted, visible — evidence you cannot attribute must not vanish.</p>` },
+  rollup: { t:'error_rollups — delete + recompute', body:`<p>Primary key (service_id, bucket_start, status_class, level, template_hash). Overlapping re-runs delete and recompute affected minutes inside one transaction under an advisory lock.</p>`
+      + `<p class="why">Upserting EXCLUDED.count undercounts after overlaps, and nothing downstream could tell.</p>` },
+  pg: { t:'PostgreSQL + pgvector', body:`<p>${Object.entries(M.counts).map(([k,v])=>`${k}: ${v}`).join(' · ')}</p>` },
+  agent: { t:'single agent', body:`<p>One model, three deterministic tools, a hard turn budget. No swarm: coordination loss and prose round-trips stay out of the loop.</p>` },
+  gate: { t:'provenance gate', body:`<p>Before anything is displayed, every citation in the summary is checked against the set of citations the tools actually returned this run. Malformed or unseen ⇒ the run aborts.</p>`
+      + `<p class="why">It proves provenance, not support: the claim points at a real row, but whether the row entails the sentence is judged by scenario contracts or a human.</p>` },
+  out: { t:'outputs', body:`<p>Rendered markdown, optional Slack, and a persisted tool-call trace inspectable with <code>aegis trace --run-id …</code>.</p>` },
+  't-diff': { t:'get_incident_diff', body:`<p>What changed near the window: focus commits with hunks, deployments, attributed infra changes, plus active peer services. Returns commit:/deploy:/infra: citations.</p>` },
+  't-tel': { t:'get_error_telemetry', body:`<p>Minute-snapped series by status class, top templates ranked by delta versus the preceding disjoint baseline, one richest exemplar each (log: cites), rollup: cites on series rows.</p>` },
+  't-pm': { t:'search_similar_postmortems', body:`<p>Cosine-nearest chunks above a similarity floor; resolution carries its own citation (postmortem:).</p>` },
+};
+let sel = null;
+document.querySelectorAll('.node').forEach(n => n.addEventListener('click', () => {
+  document.querySelectorAll('.node.sel').forEach(x => x.classList.remove('sel'));
+  n.classList.add('sel'); sel = n.dataset.node;
+  const info = NODE_INFO[n.dataset.node];
+  document.getElementById('drawer').innerHTML =
+    `<h3>${info.t}</h3>${info.body || '<p>(no detail)</p>'}`;
+}));
+
+/* ---------- spike chart ---------- */
+(function(){
+  // Render the full 13:30–14:20 window: minutes with no 5xx rollup rows are
+  // empty slots, so the ten-minute plateau reads as the anomaly it is.
+  const pts = M.checkout_5xx_series;
+  const startMin = 13*60+30, endMin = 14*60+20;
+  const byMinute = Object.fromEntries(pts.map(p=>[p.t.slice(11,16), p.count]));
+  const ticks = [];
+  for(let m=startMin;m<endMin;m++){
+    const label = String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+    ticks.push({label, count: byMinute[label]||0});
+  }
+  const svg = document.getElementById('spikebars');
+  const W=1140,H=210,pad=28,bw=(W-pad*2)/ticks.length,max=Math.max(...ticks.map(t=>t.count));
+  // The corpus spike is a plateau: mark only its first minute as the labelled peak.
+  let hotSeen=false;
+  let html='';
+  ticks.forEach((p,i)=>{
+    const h=(H-pad*2)*(p.count/max), x=pad+i*bw+2, y=H-pad-h;
+    const hot = p.count===max && p.count>0 && !hotSeen && (hotSeen=true);
+    html+=`<rect class="bar${hot?' hot':''}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${(bw-4).toFixed(1)}" height="${h.toFixed(1)}" rx="3"/>`;
+    if(i%5===0) html+=`<text x="${(x+(bw-4)/2).toFixed(1)}" y="${H-pad+16}" text-anchor="middle">${p.label}</text>`;
+    if(p.count>0) html+=`<text x="${(x+(bw-4)/2).toFixed(1)}" y="${y-8}" text-anchor="middle" style="fill:${hot?'var(--bad)':'var(--dim)'}">${p.count}</text>`;
+    if(hot) html+=`<text x="${(x+(bw-4)/2).toFixed(1)}" y="${y-22}" text-anchor="middle" style="fill:var(--bad)">Δ peak</text>`;
+  });
+  svg.innerHTML=html;
+  const tr=INV.trace.find(e=>e.kind==='tool_result');
+  if(tr){ const eff=tr.payload.result.effective_window, base=tr.payload.result.baseline_window;
+    document.getElementById('baseline-note').innerHTML=
+      `effective window ${eff.start.slice(11,16)}–${eff.end.slice(11,16)}Z vs baseline ${base.start.slice(11,16)}–${base.end.slice(11,16)}Z`; }
+})();
+
+/* ---------- replay ---------- */
+const tr = INV.trace.find(e=>e.kind==='tool_result');
+const telArgs = tr ? tr.payload.args : {};
+const telRes = tr ? tr.payload.result : {};
+const topTpl = (telRes.top_templates||[])[0]||{};
+const STEPS = [
+  { t:'1 · Alert fires', html:`<p><b>${esc(INV.alert.service)}</b> — ${esc(INV.alert.alert_name)}
+      (${esc(JSON.stringify(INV.alert.payload))})<br>window ${esc(INV.alert.window_start)} → ${esc(INV.alert.window_end)}</p>
+      <p>An atomic dedup key turns concurrent duplicate alerts into exactly one investigation.</p>`},
+  { t:'2 · Brief built', html:`<p>The request allowlist is serialized — evaluator fields like expect/reachability can never reach the model:</p>`+pre(INV.brief)},
+  { t:'3 · Turn 1 — agent calls a tool', html:`<p>The loop sent the brief plus three OpenAI function tools; back came:</p>`
+      +pre({name:"get_error_telemetry", arguments:telArgs})
+      +`<p>The adapted MCP tool executes against the spawned stdio server and real SQL.</p>`},
+  { t:'4 · Tool result captured', html:`<p>Envelope validated, citations harvested (${INV.captured_count} total this run). Top template at the spike minute:</p>`
+      +pre({template:topTpl.template_hash, level:topTpl.level, count:topTpl.count, delta:topTpl.delta, exemplar:(topTpl.exemplar||{}).cite||(topTpl.exemplar||{}).message})
+      +(telRes.series&&telRes.series[0]?`<div class="chips">${telRes.series[0].source_cites.map(c=>`<span class="chip">${esc(c)}</span>`).join('')}</div>`:'')
+      +`<p class="why">Only success-shaped envelopes matching their declared schema become capturable evidence.</p>`},
+  { t:'5 · Structured summary', html:`<p>A second request extracts strict JSON; pydantic validates it:</p>`
+      +pre({root_cause:INV.summary.root_cause, confidence:INV.summary.confidence})
+      +`<div class="chips">${INV.cited.map(c=>`<span class="chip">${esc(c)}</span>`).join('')}</div>`},
+  { t:'6 · Provenance gate', html:`<p>Every cited identifier must have been returned by a tool this run:</p>`
+      +`<p>cited ⊆ captured(${INV.captured_count}) → <b style="color:${INV.provenance_ok?'var(--good)':'var(--bad)'}">${INV.provenance_ok?'PASS':'ABORT'}</b></p>`
+      +`<div class="chips">${INV.captured_sample.map(c=>`<span class="chip dim">${esc(c)}</span>`).join('')}</div>`
+      +`<div class="verdict ${INV.provenance_ok?'ok':''}">${INV.provenance_ok?'Run complete — summary released to CLI / Slack / trace.':'Run aborted.'}</div>`},
+];
+document.getElementById('scen-name').textContent = INV.scenario;
+let cur = 0;
+const stepsEl=document.getElementById('steps'), stageEl=document.getElementById('stage');
+stepsEl.innerHTML = STEPS.map((s,i)=>`<button class="stepbtn" data-i="${i}">${esc(s.t)}</button>`).join('');
+function show(i){ cur=i;
+  stepsEl.querySelectorAll('.stepbtn').forEach((b,j)=>b.classList.toggle('on',j===i));
+  stageEl.innerHTML = `<div class="stagetitle">${STEPS[i].t}</div>`+STEPS[i].html; }
+stepsEl.addEventListener('click', e=>{ if(e.target.dataset.i!==undefined) show(+e.target.dataset.i); });
+addEventListener('keydown', e=>{ if(e.key==='ArrowRight') show(Math.min(cur+1,STEPS.length-1));
+  if(e.key==='ArrowLeft') show(Math.max(cur-1,0)); });
+show(0);
+
+/* ---------- live feed ---------- */
+const seenCommits = new Set();
+let firstFeedLoad = true;
+function renderFeed(data){
+  const rows = [];
+  for(const c of data.commits||[]){
+    const paths=(c.files_changed||[]).map(f=>f.path).slice(0,4);
+    const isNew = !firstFeedLoad && !seenCommits.has(c.sha);
+    seenCommits.add(c.sha);
+    rows.push({when:c.committed_at, service:c.service, kind:'commit',
+      detail:`<span class="kindcommit">${esc((c.sha||'').slice(0,10))}</span> ${esc(c.message||'')}`+
+        (paths.length?`<br><span class="dimtext">↳ ${esc(paths.join(', '))}${(c.files_changed||[]).length>4?' …':''}</span>`:''),
+      isNew});
+  }
+  for(const d of data.deployments||[]){
+    rows.push({when:d.started_at, service:d.service, kind:'deploy',
+      detail:`<span class="kinddeploy">${esc(d.environment)}</span> ${esc(d.status)} · ${esc((d.commit_sha||'').slice(0,10))}`, isNew:false});
+  }
+  for(const i of data.infra_changes||[]){
+    rows.push({when:i.applied_at, service:i.service||'(unattributed)', kind:'infra',
+      detail:`<span class="kindinfra">${esc(i.action)}</span> ${esc(i.resource_name)} · ${esc(i.apply_id)}`, isNew:false});
+  }
+  rows.sort((a,b)=>String(b.when).localeCompare(String(a.when)));
+  document.getElementById('feedbody').innerHTML = rows.slice(0,20).map(r=>
+    `<tr${r.isNew?' class="newrow"':''}><td class="mono">${esc(String(r.when).replace('T',' ').slice(0,19))}</td>`+
+    `<td>${esc(r.service||'')}</td><td class="mono">${r.kind}</td><td>${r.detail}</td></tr>`).join('')
+    || '<tr><td colspan="4" style="color:var(--dim)">no evidence ingested yet — push something</td></tr>';
+  document.getElementById('wm').textContent =
+    'watermarks: ' + ((data.watermarks||[]).map(w=>`${w.source}=${w.last_cursor}`).join(' · ') || 'none');
+}
+async function pollLive(){
+  try{
+    if(location.protocol==='file:')
+      throw new Error('opened as a file — live mode needs the API');
+    const res=await fetch('/viz/live',{cache:'no-store'});
+    if(!res.ok) throw new Error(res.status);
+    const data=await res.json();
+    renderFeed(data);
+    document.getElementById('livedot').className='dot on';
+    document.getElementById('livestate').textContent='live';
+    document.getElementById('lastpoll').textContent='last poll '+new Date().toLocaleTimeString()+' · '+data.generated_at;
+    firstFeedLoad=false;
+  }catch(err){
+    const fileMode=location.protocol==='file:';
+    document.getElementById('livedot').className='dot off';
+    document.getElementById('livestate').innerHTML=
+      fileMode?'offline — you opened the file directly; use <b>http://127.0.0.1:8000/viz</b>'
+              :'offline — is serve-api running?';
+  }
+}
+pollLive();
+setInterval(pollLive, 4000);
+
+/* ---------- reveal ---------- */
+const io=new IntersectionObserver(es=>es.forEach(en=>{ if(en.isIntersecting){en.target.classList.add('on'); io.unobserve(en.target);} }),{threshold:.12});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+</script>
+</body>
+</html>
